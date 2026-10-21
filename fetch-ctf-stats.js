@@ -300,11 +300,11 @@ function matchStats(id, raw, maps) {
   const duration = m.duration;
   const limit = (m.timeLimit || 0) * 60 * FPS;
   const ps = m.players.map((p, idx) => ({
-    idx, name: p.name, auth: !!p.auth,
+    idx, name: p.name, auth: !!p.auth, euScore: p.score ?? 0, euPoints: p.points ?? 0,
     tags: 0, pops: 0, grabs: 0, drops: 0, captures: 0, returns: 0,
     hold: 0, prevent: 0, button: 0, block: 0,
     pups: 0, jj: 0, rb: 0, tp: 0, ts: 0,
-    lh: 0, flcds: 0, ho: 0, gho: 0, coh: 0, cor: 0, otcaps: 0, qr: 0, kr: 0, rib: 0, saves: 0,
+    lh: 0, flcds: 0, ho: 0, gho: 0, goh: 0, gor: 0, coh: 0, cor: 0, otcaps: 0, qr: 0, kr: 0, rib: 0, saves: 0,
     teamTime: { 1: 0, 2: 0 }, intervals: [],
   }));
 
@@ -371,6 +371,8 @@ function matchStats(id, raw, maps) {
     const s = ps[h.player], span = h.end - h.start;
     if (span >= LONG_HOLD) s.lh++;
     if (span < FLACCID) s.flcds++;
+    if (h.from === 'handoff') s.goh++;
+    if (h.from === 'regrab') s.gor++;
     if (h.how === 'cap') {
       if (h.from === 'handoff') s.coh++;
       if (h.from === 'regrab') s.cor++;
@@ -433,10 +435,12 @@ function matchStats(id, raw, maps) {
       hold: round(s.hold / FPS), prevent: round(s.prevent / FPS), button: round(s.button / FPS), block: round(s.block / FPS),
       pups: s.pups, juke_juice: s.jj, rolling_bomb: s.rb, tagpro: s.tp, top_speed: s.ts, pups_available: totalPups,
       long_holds: s.lh, flaccids: s.flcds, handoffs: s.ho, good_handoffs: s.gho,
+      grabs_off_handoffs: s.goh, grabs_off_regrabs: s.gor,
       caps_off_handoffs: s.coh, caps_off_regrabs: s.cor, ot_caps: s.otcaps,
       quick_returns: s.qr, key_returns: s.kr, returns_in_base: s.rib, saves: s.saves,
       nr_tags: Math.max(0, s.tags - s.returns), nd_pops: Math.max(0, s.pops - s.drops),
       kept_flags: s.grabs - s.drops - s.captures, hold_against: round(ha / FPS),
+      eu_score: s.euScore, eu_points: s.euPoints,
     };
   });
   for (const r of rows) Object.assign(r, rates(r));
@@ -503,8 +507,8 @@ function scoreboard(rows, gameMinutes) {
 
 const SUMS = ['minutes', 'caps_for', 'caps_against', 'cap_diff', 'tags', 'pops', 'grabs', 'drops', 'captures',
   'returns', 'hold', 'prevent', 'button', 'block', 'pups', 'juke_juice', 'rolling_bomb', 'tagpro', 'top_speed',
-  'pups_available', 'long_holds', 'flaccids', 'handoffs', 'good_handoffs', 'caps_off_handoffs', 'caps_off_regrabs',
-  'ot_caps', 'quick_returns', 'key_returns', 'returns_in_base', 'saves', 'nr_tags', 'nd_pops', 'kept_flags', 'hold_against'];
+  'pups_available', 'long_holds', 'flaccids', 'handoffs', 'good_handoffs', 'grabs_off_handoffs', 'grabs_off_regrabs', 'caps_off_handoffs', 'caps_off_regrabs',
+  'ot_caps', 'quick_returns', 'key_returns', 'returns_in_base', 'saves', 'nr_tags', 'nd_pops', 'kept_flags', 'hold_against', 'eu_score', 'eu_points'];
 
 function totals(rows) {
   const by = new Map();

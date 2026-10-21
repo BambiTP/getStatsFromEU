@@ -60,20 +60,24 @@ reconstruction, not a league's published number.
 
 ## 4. Stats worked out from the match timeline
 
+These are the final definitions: the ones fetch-ctf-stats.js uses. They match MLTP's published
+definitions and, on all 120 player rows of S39 Majors week 7, the NALTP archive's numbers exactly.
 Sources: naltp/derived_stats.py, RankedStatsCollector/eu_ctf.py, TagproStats/main.py.
 
 Offence
-- **Long hold**: a hold of 8+ s (NALTP). RankedStatsCollector uses 20+ s, TagproStats 10+ s.
+- **Long hold**: a hold of 8 s or more.
 - **Flaccid**: a grab lost within 2 s.
 - **Handoff**: a hold under 3 s that a teammate picks up within 2 s.
 - **Good handoff**: a handoff the teammate then holds for more than 5 s.
+- **Grabs off handoffs**: grabs that came from a teammate's handoff.
+- **Grabs off regrabs**: any other grab within 2 s of the team's last hold ending (not after a cap).
 - **Caps off handoffs / caps off regrabs**: a capture by the player who took the flag from a handoff / a regrab.
 - **Overtime caps**: captures after the clock ran out.
 
 Defence
 - **Quick return**: a return after the enemy held for less than 2 s.
 - **Key return**: a return made within 3 s before your team capped.
-- **Return in base**: a return within 6 tiles of your own flag (RankedStatsCollector: 5.5 tiles).
+- **Return in base**: a return within 6 tiles of your own flag.
 - **Save**: a return within 6 tiles of the enemy's flag while nobody on your team is holding.
 - **Non-return tags** = tags − returns. **Non-drop pops** = pops − drops.
 - **Hold against**: seconds the enemy held the flag while you were playing.
@@ -85,6 +89,8 @@ Ratios (RankedStatsCollector)
 - Pup % = your powerups ÷ every powerup taken in the game.
 - Support = button ÷ 5 + (block ÷ 5) × 2 (whole-number division).
 - Every stat per minute and per 8 minutes. Win % overall and on red / blue.
+- **tagpro.eu score and points**: the `score` and `points` tagpro.eu stores for each player (the
+  league exports' `score` column).
 
 MLTP's stats page (tagproleague.com/MLTP/stats, column tooltips) uses the same definitions:
 flaccid = a grab with under 2 s of hold, handoff = a teammate grabs within 2 s of a hold under 3 s,
@@ -98,9 +104,9 @@ enemy was about to capture", and it doesn't say how long a long hold is. Its ext
 TagproStats extras
 - Kept flags = grabs − drops − caps. Cap difference. Hold and prevent for and against. Win = 1, loss = 0, tie = 2.
 
-## Where the sources disagree
+## Other sources' numbers (not used)
 
-- Flaccid: under 2 s in code; about 3–4 s per Bambi.
-- Long hold: 8, 10 or 20 s depending on the source.
-- Return in base: 5.5 or 6 tiles.
+- Long hold: RankedStatsCollector 20 s, TagproStats 10 s.
+- Flaccid: Bambi's estimate of about 3–4 s.
+- Return in base: RankedStatsCollector 5.5 tiles.
 - Prevent: real definition unconfirmed; tagpro-local uses its own 8-tile version.
