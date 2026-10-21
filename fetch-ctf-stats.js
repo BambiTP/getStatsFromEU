@@ -433,18 +433,36 @@ function matchStats(id, raw, maps, allModes) {
     }
   }
 
-  // the league's hold: holds still running at the end left out, regulation and overtime each
-  // rounded to whole seconds (halves up); hold against = the other team's league hold
+  // the league's periods: regulation, then clutch time (the score wasn't tied at the limit and a flag
+  // was held: play runs on until that hold ends), then overtime (tied at the limit, or tied by a
+  // clutch-time cap)
+  const bounds = [0];
+  if (limit && duration > limit) {
+    const capsBy = (t) => [1, 2].map((side) => holds.filter((h) => h.side === side && h.how === 'cap' && h.end <= t).length);
+    const [a, b] = capsBy(limit);
+    let otFrom = limit;
+    if (a !== b) {
+      const live = holds.filter((h) => h.start <= limit && h.end > limit);
+      const clutchEnd = live.length ? Math.max(...live.map((h) => h.end)) : duration;
+      bounds.push(limit);
+      otFrom = clutchEnd;
+    }
+    if (otFrom < duration) bounds.push(otFrom);
+  }
+  bounds.push(duration);
+
+  // the league's hold: holds still running at the end left out, each period rounded to whole
+  // seconds (halves up); hold against = the other team's league hold
   const leagueHold = ps.map(() => 0);
   ps.forEach((s, i) => {
-    let reg = 0, ot = 0;
-    for (const h of holds) {
-      if (h.player !== i || h.how === 'end') continue;
-      const cut = limit || Infinity;
-      reg += Math.max(0, Math.min(h.end, cut) - h.start);
-      ot += Math.max(0, h.end - Math.max(h.start, cut));
+    for (let k = 0; k + 1 < bounds.length; k++) {
+      let part = 0;
+      for (const h of holds) {
+        if (h.player !== i || h.how === 'end') continue;
+        part += Math.max(0, Math.min(h.end, bounds[k + 1]) - Math.max(h.start, bounds[k]));
+      }
+      if (part) leagueHold[i] += Math.floor(part / FPS + 0.5);
     }
-    leagueHold[i] = Math.floor(reg / FPS + 0.5) + (ot ? Math.floor(ot / FPS + 0.5) : 0);
   });
   const firstTeam = ps.map((s) => s.intervals[0]?.team ?? 0);
 

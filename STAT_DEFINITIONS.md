@@ -65,12 +65,19 @@ These are the TagPro League's own definitions, worked out by fitting its publish
 
 | Check | Matches | Player rows | Rows matching, per stat |
 |---|---|---|---|
-| MLTP S39 Majors (fitted) | 86 | 688 | 688 on every stat but handoffs (687) |
-| MLTP S38 Majors (holdout) | 74 | 592 | 590–592 |
+| MLTP S39 Majors (fitted) | 102 | 816 | 816 on every stat but handoffs and saves (815) |
+| MLTP S38 Majors (holdout) | 92 | 736 | 734–736 |
 
-Only matches whose league grabs, caps and returns agree exactly with tagpro.eu are compared; the rest
-have league data cut short or split oddly. S38 match 4171096 is left out because the league has
+Only matches whose league grabs, caps and returns agree exactly with tagpro.eu are compared (the few
+left out have league data cut short). S38 match 4171096 is left out because the league has
 one player there on "team 0". fetch-ctf-stats.js uses exactly these rules.
+
+Periods: the league keeps separate stats for **regulation** (the time limit), **clutch time** and
+**overtime**. Clutch time happens when the score isn't tied at the limit but a flag is being held:
+play runs on until that hold ends (capped or returned). Overtime is sudden death after a tie: from
+the limit if the score was tied, or from the end of clutch time if a clutch-time capture tied it.
+A match can have all three. tagpro.eu keeps them in one match; to compare with the league, add the
+league's regulation (gNh1), clutch (othN) and overtime (gNot) stats for that game.
 
 How the league reads a match: each team's holds are taken in order of grab time, and events in the
 same frame are taken in player order (the order of players in the match file). A "teammate's hold"
@@ -105,7 +112,7 @@ Defence
 
 Hold
 - **League hold**: hold in whole seconds, leaving out a hold still running at the end of the game;
-  regulation and overtime are each rounded separately (halves round up). tagpro.eu's own hold
+  regulation, clutch time and overtime are each rounded separately (halves round up). tagpro.eu's own hold
   includes the last hold, so it can be higher.
 - **Hold against**: the sum of the league hold of every player on the other team (team = the
   team a player first joined).
