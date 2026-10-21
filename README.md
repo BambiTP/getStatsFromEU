@@ -35,5 +35,5 @@ node fetch-ctf-stats.js bulk 3934654-3934661,3934700,3935000-3935010 --totals to
 | `--delay MS` | wait between tagpro.eu requests; stops on HTTP 429 or 5xx | `2000` |
 
 GASP and NISH in the totals are worked out against the players in that output only (a reconstruction,
-not a league's published number). Timeline thresholds (long hold 20 s, flaccid 2 s, ...) are at the top
+not a league's published number). Timeline thresholds (fitted to the TagPro League's own numbers) are at the top
 of the script.

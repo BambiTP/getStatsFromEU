@@ -60,34 +60,55 @@ reconstruction, not a league's published number.
 
 ## 4. Stats worked out from the match timeline
 
-These are the definitions fetch-ctf-stats.js uses. Each was checked against the league's own
-numbers (tagproleague.com game stats, S39 Majors week 7, 15 matches, 120 player rows, overtime
-included). **Verified** = matches the league on every row except one match the league's data cuts
-short (4307387) and an overtime edge case. **Not verified** = the league's numbers fit no rule
-tried, so the definition here is a best guess.
-Sources: naltp/derived_stats.py, RankedStatsCollector/eu_ctf.py, TagproStats/main.py.
+These are the TagPro League's own definitions, worked out by fitting its published numbers
+(tagproleague.com game stats) and confirmed on a season they were not fitted to:
+
+| Check | Matches | Player rows | Rows matching, per stat |
+|---|---|---|---|
+| MLTP S39 Majors (fitted) | 86 | 688 | 688 on every stat but handoffs (687) |
+| MLTP S38 Majors (holdout) | 74 | 592 | 590–592 |
+
+Only matches whose league grabs, caps and returns agree exactly with tagpro.eu are compared; the rest
+have league data cut short or split oddly. S38 match 4171096 is left out because the league has
+one player there on "team 0". fetch-ctf-stats.js uses exactly these rules.
+
+How the league reads a match: each team's holds are taken in order of grab time, and events in the
+same frame are taken in player order (the order of players in the match file). A "teammate's hold"
+below always means the team's hold immediately before, by a different player.
 
 Offence
-- **Long hold** (verified): a hold of 20 s or more.
-- **Flaccid** (verified): a hold shorter than 2 s.
-- **Grabs off handoffs** (verified): a grab less than 2 s after a teammate's hold of less than 3 s ended (not in a cap).
-- **Caps off handoffs** (verified): a capture from a grab off a handoff.
-- **Handoff** (not verified): credited to the teammate who gave a grab off a handoff. The league's
-  handoff column is much larger (350 against 150 grabs off handoffs in the week) and fits no rule tried.
-- **Good handoff** (not verified): a handoff the teammate then holds for more than 5 s.
-- **Grabs off regrabs / caps off regrabs** (not verified): any other grab less than 2 s after the team's
-  last hold ended / a capture from one. The league counts more (267 against 230).
+- **Long hold**: a hold longer than 20 s. A hold still running when the game ends doesn't count.
+- **Flaccid**: a hold shorter than 2 s that ends in a drop (not a cap, not the end of the game).
+- **Grab off a handoff**: a grab less than 2 s after a teammate's hold of less than 3 s ended (that
+  hold may have ended in a cap).
+- **Cap off a handoff**: a capture from a grab off a handoff.
+- **Grab off a regrab**: a grab less than 3 s after a teammate's hold of more than 5 s ended (that
+  hold may have ended in a cap). A grab in the same frame counts only if the teammate comes earlier in
+  the player order.
+- **Cap off a regrab**: a capture from a grab off a regrab.
+- **Handoff** (credited to the player whose hold ended, whatever its length): the teammate grabs less
+  than 3 s later, then holds for more than 2 s and drops. If the teammate captures instead, it counts
+  only when it was a grab off a handoff.
+- **Good handoff**: a handoff where the teammate holds for more than 5 s.
 - **Overtime caps**: captures after the clock ran out.
 
 Defence
-- **Quick return** (verified): a return after the enemy held for less than 2 s.
-- **Key return** (verified): each capture credits only the team's last return before it, if that
-  return came less than 3 s before the capture.
-- **Return in base** (not verified): a return within 6 tiles of your own flag. The league counts fewer
-  (557 against 625); 5 tiles from the flag tile's corner comes closest (552) but still misses 30 rows.
-- **Save** (not verified): a return within 6 tiles of the enemy's flag while nobody on your team is holding.
+- **Quick return**: a return after the enemy held for less than 2 s.
+- **Key return**: each capture credits only the team's last return before it, if that return came
+  less than 3 s before the capture.
+- **Return in base**: the returned carrier's splat, moved one tile (40 px) right and one tile down, is
+  less than 5 tiles from your flag's centre. The splat used is the one in the return's own frame.
+- **Save**: the same moved splat is less than 2 tiles from the enemy flag's centre, and no teammate
+  is holding the flag (a teammate's hold that began less than half a second before the return
+  doesn't count).
 - **Non-return tags** = tags − returns. **Non-drop pops** = pops − drops.
-- **Hold against**: seconds the enemy held the flag while you were playing.
+
+Hold
+- **League hold**: hold in whole seconds, leaving out a hold still running at the end of the game;
+  regulation and overtime are each rounded separately (halves round up). tagpro.eu's own hold
+  includes the last hold, so it can be higher.
+- **Hold against**: the sum of the league hold of every player on the other team (team = the
+  team a player first joined).
 
 Ratios (RankedStatsCollector)
 - Score % = caps ÷ grabs. K/D = tags ÷ pops. Hold per grab. Prevent per return. Prevent ÷ hold against.
@@ -99,11 +120,9 @@ Ratios (RankedStatsCollector)
 - **tagpro.eu score and points**: the `score` and `points` tagpro.eu stores for each player (the
   league exports' `score` column).
 
-MLTP's stats page (tagproleague.com/MLTP/stats, column tooltips) uses the same definitions:
-flaccid = a grab with under 2 s of hold, handoff = a teammate grabs within 2 s of a hold under 3 s,
-good handoff = the teammate then holds over 5 s, quick return = the enemy held under 2 s,
-key return = your team caps within 3 s of the return. It defines a save only as "a return when the
-enemy was about to capture", and it doesn't say how long a long hold is (its numbers say 20 s). Its extra columns:
+MLTP's stats page (tagproleague.com/MLTP/stats) has column tooltips, but several are looser than
+what its numbers show: it calls a handoff "a teammate grab within 2 s of a < 3 s hold" and a save
+"a return when the enemy was about to capture", and gives no length for a long hold. Its extra columns:
 - **Spark %**: the share of captures from grabs the player made themselves, not from a regrab or handoff:
   (caps − caps off handoffs − caps off regrabs) ÷ caps.
 - **Kept flags (KF)**, **PM** (cap difference), **hold against per minute**.
@@ -113,7 +132,10 @@ TagproStats extras
 
 ## Other sources' numbers (not used)
 
-- Long hold: NALTP 8 s, TagproStats 10 s, TagPro Reference over 10 s.
+- Long hold: NALTP 8 s, TagproStats 10 s, TagPro Reference over 10 s, RankedStatsCollector 20 s or more.
 - Flaccid: Bambi's estimate of about 3–4 s.
+- Handoff and regrab: NALTP and RankedStatsCollector use "hold under 3 s, picked up within 2 s" for
+  handoffs and count every other quick pick-up as a regrab.
+- Return in base / saves: NALTP 6 tiles from the flag tile's centre.
 - Return in base: RankedStatsCollector 5.5 tiles, TagPro Reference 10 tiles.
 - Prevent: real definition unconfirmed; tagpro-local uses its own 8-tile version.

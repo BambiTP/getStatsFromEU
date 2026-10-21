@@ -33,14 +33,21 @@ const { pipeline } = require('stream/promises');
 const decoder = require('./decoder.js');
 
 const FPS = 60;
-const LONG_HOLD = 20 * FPS;       // a hold this long or longer (matches the league's numbers)
-const FLACCID = 2 * FPS;          // a grab lost sooner than this
-const HANDOFF = 2 * FPS;          // a teammate picks the flag up sooner than this after the hold ended
-const HANDOFF_HOLD = 3 * FPS;     // ...off a hold shorter than this
-const GOOD_HOLD = 5 * FPS;        // ...and holds it longer than this: a good handoff
-const QUICK = 2 * FPS;            // a return of a hold shorter than this
-const KEY = 3 * FPS;              // the last return before a cap, if it came less than this before
-const NEAR = 6 * 40;              // six tiles, in pixels: return in base / save radius
+// timeline thresholds, fitted to the league's own numbers (tagproleague.com, MLTP S38-S39)
+const LONG_HOLD = 20 * FPS;       // a hold longer than this, not still running at the end
+const FLACCID = 2 * FPS;          // a hold shorter than this that ends in a drop
+const HANDOFF = 2 * FPS;          // grab off a handoff: sooner than this after...
+const HANDOFF_HOLD = 3 * FPS;     // ...a teammate's hold shorter than this
+const PASS = 3 * FPS;             // regrabs and handoffs given: a teammate grabs sooner than this
+const REGRAB_HOLD = 5 * FPS;      // regrab: off a teammate's hold longer than this
+const PASS_HOLD = 2 * FPS;        // handoff given: the teammate then holds longer than this (and drops)
+const GOOD_HOLD = 5 * FPS;        // good handoff: the teammate holds longer than this
+const QUICK = 2 * FPS;            // quick return: the enemy held less than this
+const KEY = 3 * FPS;              // key return: the last return before a cap, less than this before it
+const SPLAT_SHIFT = 40;           // the league measures from the splat moved one tile right and down
+const RIB_RADIUS = 5 * 40;        // return in base: less than 5 tiles from your flag
+const SAVE_RADIUS = 2 * 40;       // save: less than 2 tiles from the enemy flag...
+const SAVE_LAG = FPS / 2;         // ...with no teammate holding (a hold begun this recently doesn't count)
 const MATCH_TOL = 2;              // frames allowed between a return and the splat or drop it caused
 
 // GASP (TagPro League) weights; NISH uses the same ones with the totals made per minute
@@ -289,14 +296,17 @@ function flagStands(tiles) {
   return out;
 }
 
+// tagpro.eu's map "type" is mostly a label (ctf, -, b18, p16, ...); only these name other modes
+const OTHER_MODES = new Set(['nf', '2nf', 'mb', 'dtf']);
 function isCtf(m) {
-  if (m.map && m.map.type) return m.map.type === 'ctf';
+  if (m.map && OTHER_MODES.has(m.map.type)) return false;
   const s = flagStands(m.map && m.map.tiles);
   return !!(s[1] && s[2]);
 }
 
-function matchStats(id, raw, maps) {
+function matchStats(id, raw, maps, allModes) {
   const m = decoder.processMatch(raw, maps, { gameinfo: true, map: true, players: true, team: true, splats: true });
+  if (!allModes && !isCtf(m)) return null;
   const duration = m.duration;
   const limit = (m.timeLimit || 0) * 60 * FPS;
   const ps = m.players.map((p, idx) => ({
@@ -354,31 +364,31 @@ function matchStats(id, raw, maps) {
     for (const k of Object.keys(open)) if (open[k] >= 0) s[k] += duration - open[k];
   });
 
-  // how each possession began: picked straight back up by the same side after a short hold by
-  // someone else is a handoff, any other quick pick-up is a regrab
-  holds.sort((a, b) => a.start - b.start);
+  // each hold against the same side's hold before it (events in one frame are taken in player order,
+  // as the league does). These rules reproduce the league's numbers; see STAT_DEFINITIONS.md.
+  holds.sort((a, b) => a.start - b.start || a.player - b.player);
+  const dropped = (h) => h.how === 'drop' || h.how === 'pop';
   const last = {};
   for (const h of holds) {
-    const prev = last[h.side];
-    h.from = '';
-    if (prev && prev.how !== 'cap' && h.start - prev.end >= 0 && h.start - prev.end < HANDOFF) {
-      if (prev.end - prev.start < HANDOFF_HOLD && prev.player !== h.player) { h.from = 'handoff'; h.giver = prev.player; }
-      else h.from = 'regrab';
-    }
+    const s = ps[h.player], span = h.end - h.start, prev = last[h.side];
     last[h.side] = h;
-  }
-  for (const h of holds) {
-    const s = ps[h.player], span = h.end - h.start;
-    if (span >= LONG_HOLD) s.lh++;
-    if (span < FLACCID) s.flcds++;
-    if (h.from === 'handoff') s.goh++;
-    if (h.from === 'regrab') s.gor++;
-    if (h.how === 'cap') {
-      if (h.from === 'handoff') s.coh++;
-      if (h.from === 'regrab') s.cor++;
-      if (limit && h.end > limit) s.otcaps++;
+    if (span > LONG_HOLD && h.how !== 'end') s.lh++;
+    if (span < FLACCID && dropped(h)) s.flcds++;
+    if (limit && h.how === 'cap' && h.end > limit) s.otcaps++;
+    if (!prev || prev.player === h.player) continue;
+    const gap = h.start - prev.end, given = prev.end - prev.start;
+    if (gap < 0) continue;
+    // grab off a handoff: a teammate's hold shorter than HANDOFF_HOLD ended less than HANDOFF ago
+    const handoff = gap < HANDOFF && given < HANDOFF_HOLD;
+    if (handoff) { s.goh++; if (h.how === 'cap') s.coh++; }
+    // grab off a regrab: a teammate's hold longer than REGRAB_HOLD ended less than PASS ago
+    if (gap < PASS && given > REGRAB_HOLD && (gap > 0 || prev.player < h.player)) { s.gor++; if (h.how === 'cap') s.cor++; }
+    // handoff given (credited to the earlier holder): the teammate holds longer than PASS_HOLD and
+    // drops, or caps off a handoff
+    if ((dropped(h) && gap < PASS && span > PASS_HOLD) || (h.how === 'cap' && handoff)) {
+      ps[prev.player].ho++;
+      if (span > GOOD_HOLD) ps[prev.player].gho++;
     }
-    if (h.giver !== undefined) { ps[h.giver].ho++; if (span > GOOD_HOLD) ps[h.giver].gho++; }
   }
 
   // splats: each team's splat list is in the order of that team's pops (drops included)
@@ -406,27 +416,44 @@ function matchStats(id, raw, maps) {
   }
   for (const r of returns) {
     const s = ps[r.player], mine = r.side, theirs = 3 - mine;
-    const stopped = holds.find((h) => h.side !== mine && Math.abs(h.end - r.time) <= MATCH_TOL && (h.how === 'drop' || h.how === 'pop'));
+    const stopped = holds.find((h) => h.side !== mine && Math.abs(h.end - r.time) <= MATCH_TOL && dropped(h));
     if (stopped && stopped.end - stopped.start < QUICK) s.qr++;
-    const at = splats.find((sp) => sp.side === theirs && Math.abs(sp.time - r.time) <= MATCH_TOL);
+    // the splat of the returned carrier: the one in the return's own frame if there is one
+    let at = null;
+    for (const sp of splats) {
+      if (sp.side !== theirs || Math.abs(sp.time - r.time) > MATCH_TOL) continue;
+      if (!at || Math.abs(sp.time - r.time) < Math.abs(at.time - r.time)) at = sp;
+    }
     if (at) {
-      const near = (p) => p && (at.x - p[0]) ** 2 + (at.y - p[1]) ** 2 <= NEAR ** 2;
-      if (near(stands[mine])) s.rib++;
-      const holding = holds.some((h) => h.side === mine && h.start <= r.time && r.time <= h.end);
-      if (!holding && near(stands[theirs])) s.saves++;
+      // the league measures from the splat point moved one tile right and one tile down
+      const within = (p, radius) => p && (at.x + SPLAT_SHIFT - p[0]) ** 2 + (at.y + SPLAT_SHIFT - p[1]) ** 2 < radius ** 2;
+      if (within(stands[mine], RIB_RADIUS)) s.rib++;
+      const holding = holds.some((h) => h.side === mine && h.start <= r.time - SAVE_LAG && r.time <= h.end);
+      if (!holding && within(stands[theirs], SAVE_RADIUS)) s.saves++;
     }
   }
 
+  // the league's hold: holds still running at the end left out, regulation and overtime each
+  // rounded to whole seconds (halves up); hold against = the other team's league hold
+  const leagueHold = ps.map(() => 0);
+  ps.forEach((s, i) => {
+    let reg = 0, ot = 0;
+    for (const h of holds) {
+      if (h.player !== i || h.how === 'end') continue;
+      const cut = limit || Infinity;
+      reg += Math.max(0, Math.min(h.end, cut) - h.start);
+      ot += Math.max(0, h.end - Math.max(h.start, cut));
+    }
+    leagueHold[i] = Math.floor(reg / FPS + 0.5) + (ot ? Math.floor(ot / FPS + 0.5) : 0);
+  });
+  const firstTeam = ps.map((s) => s.intervals[0]?.team ?? 0);
+
   const teamScore = { 1: m.teams?.[0]?.score ?? 0, 2: m.teams?.[1]?.score ?? 0 };
   const totalPups = ps.reduce((n, s) => n + s.pups, 0);
-  const rows = ps.map((s) => {
+  const rows = ps.map((s, i) => {
     const team = s.teamTime[1] >= s.teamTime[2] ? (s.teamTime[1] ? 1 : 0) : 2;
-    // enemy hold while this player was on the field
     let ha = 0;
-    for (const h of holds) for (const iv of s.intervals) {
-      if (iv.team === h.side) continue;
-      ha += Math.max(0, Math.min(h.end, iv.end) - Math.max(h.start, iv.start));
-    }
+    if (firstTeam[i]) ps.forEach((_, j) => { if (firstTeam[j] && firstTeam[j] !== firstTeam[i]) ha += leagueHold[j]; });
     const minutes = (s.teamTime[1] + s.teamTime[2]) / FPS / 60;
     const capsFor = team ? teamScore[team] : 0, capsAgainst = team ? teamScore[3 - team] : 0;
     return {
@@ -444,7 +471,7 @@ function matchStats(id, raw, maps) {
       caps_off_handoffs: s.coh, caps_off_regrabs: s.cor, ot_caps: s.otcaps,
       quick_returns: s.qr, key_returns: s.kr, returns_in_base: s.rib, saves: s.saves,
       nr_tags: Math.max(0, s.tags - s.returns), nd_pops: Math.max(0, s.pops - s.drops),
-      kept_flags: s.grabs - s.drops - s.captures, hold_against: round(ha / FPS),
+      kept_flags: s.grabs - s.drops - s.captures, league_hold: leagueHold[i], hold_against: ha,
       eu_score: s.euScore, eu_points: s.euPoints,
     };
   });
@@ -513,7 +540,7 @@ function scoreboard(rows, gameMinutes) {
 const SUMS = ['minutes', 'caps_for', 'caps_against', 'cap_diff', 'tags', 'pops', 'grabs', 'drops', 'captures',
   'returns', 'hold', 'prevent', 'button', 'block', 'pups', 'juke_juice', 'rolling_bomb', 'tagpro', 'top_speed',
   'pups_available', 'long_holds', 'flaccids', 'handoffs', 'good_handoffs', 'grabs_off_handoffs', 'grabs_off_regrabs', 'caps_off_handoffs', 'caps_off_regrabs',
-  'ot_caps', 'quick_returns', 'key_returns', 'returns_in_base', 'saves', 'nr_tags', 'nd_pops', 'kept_flags', 'hold_against', 'eu_score', 'eu_points'];
+  'ot_caps', 'quick_returns', 'key_returns', 'returns_in_base', 'saves', 'nr_tags', 'nd_pops', 'kept_flags', 'league_hold', 'hold_against', 'eu_score', 'eu_points'];
 
 function totals(rows) {
   const by = new Map();
@@ -597,8 +624,10 @@ async function main() {
   for await (const [id, raw, maps] of source) {
     try {
       const m = raw.map || !maps ? raw : { ...raw, map: maps[raw.mapId] };
-      if (!opt.allModes && !isCtf(m)) { skipped++; continue; }
-      rows.push(...matchStats(id, raw, maps));
+      if (!opt.allModes && m.map && OTHER_MODES.has(m.map.type)) { skipped++; continue; }
+      const got = matchStats(id, raw, maps, opt.allModes);
+      if (!got) { skipped++; continue; }
+      rows.push(...got);
       done++;
     } catch (e) {
       failed++;
