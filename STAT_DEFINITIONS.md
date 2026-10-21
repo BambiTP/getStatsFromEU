@@ -60,25 +60,32 @@ reconstruction, not a league's published number.
 
 ## 4. Stats worked out from the match timeline
 
-These are the final definitions: the ones fetch-ctf-stats.js uses. They match MLTP's published
-definitions and, on all 120 player rows of S39 Majors week 7, the NALTP archive's numbers exactly.
+These are the definitions fetch-ctf-stats.js uses. Each was checked against the league's own
+numbers (tagproleague.com game stats, S39 Majors week 7, 15 matches, 120 player rows, overtime
+included). **Verified** = matches the league on every row except one match the league's data cuts
+short (4307387) and an overtime edge case. **Not verified** = the league's numbers fit no rule
+tried, so the definition here is a best guess.
 Sources: naltp/derived_stats.py, RankedStatsCollector/eu_ctf.py, TagproStats/main.py.
 
 Offence
-- **Long hold**: a hold of 8 s or more.
-- **Flaccid**: a grab lost within 2 s.
-- **Handoff**: a hold under 3 s that a teammate picks up within 2 s.
-- **Good handoff**: a handoff the teammate then holds for more than 5 s.
-- **Grabs off handoffs**: grabs that came from a teammate's handoff.
-- **Grabs off regrabs**: any other grab within 2 s of the team's last hold ending (not after a cap).
-- **Caps off handoffs / caps off regrabs**: a capture by the player who took the flag from a handoff / a regrab.
+- **Long hold** (verified): a hold of 20 s or more.
+- **Flaccid** (verified): a hold shorter than 2 s.
+- **Grabs off handoffs** (verified): a grab less than 2 s after a teammate's hold of less than 3 s ended (not in a cap).
+- **Caps off handoffs** (verified): a capture from a grab off a handoff.
+- **Handoff** (not verified): credited to the teammate who gave a grab off a handoff. The league's
+  handoff column is much larger (350 against 150 grabs off handoffs in the week) and fits no rule tried.
+- **Good handoff** (not verified): a handoff the teammate then holds for more than 5 s.
+- **Grabs off regrabs / caps off regrabs** (not verified): any other grab less than 2 s after the team's
+  last hold ended / a capture from one. The league counts more (267 against 230).
 - **Overtime caps**: captures after the clock ran out.
 
 Defence
-- **Quick return**: a return after the enemy held for less than 2 s.
-- **Key return**: a return made within 3 s before your team capped.
-- **Return in base**: a return within 6 tiles of your own flag.
-- **Save**: a return within 6 tiles of the enemy's flag while nobody on your team is holding.
+- **Quick return** (verified): a return after the enemy held for less than 2 s.
+- **Key return** (verified): each capture credits only the team's last return before it, if that
+  return came less than 3 s before the capture.
+- **Return in base** (not verified): a return within 6 tiles of your own flag. The league counts fewer
+  (557 against 625); 5 tiles from the flag tile's corner comes closest (552) but still misses 30 rows.
+- **Save** (not verified): a return within 6 tiles of the enemy's flag while nobody on your team is holding.
 - **Non-return tags** = tags − returns. **Non-drop pops** = pops − drops.
 - **Hold against**: seconds the enemy held the flag while you were playing.
 
@@ -96,7 +103,7 @@ MLTP's stats page (tagproleague.com/MLTP/stats, column tooltips) uses the same d
 flaccid = a grab with under 2 s of hold, handoff = a teammate grabs within 2 s of a hold under 3 s,
 good handoff = the teammate then holds over 5 s, quick return = the enemy held under 2 s,
 key return = your team caps within 3 s of the return. It defines a save only as "a return when the
-enemy was about to capture", and it doesn't say how long a long hold is. Its extra columns:
+enemy was about to capture", and it doesn't say how long a long hold is (its numbers say 20 s). Its extra columns:
 - **Spark %**: the share of captures from grabs the player made themselves, not from a regrab or handoff:
   (caps − caps off handoffs − caps off regrabs) ÷ caps.
 - **Kept flags (KF)**, **PM** (cap difference), **hold against per minute**.
@@ -106,7 +113,7 @@ TagproStats extras
 
 ## Other sources' numbers (not used)
 
-- Long hold: RankedStatsCollector 20 s, TagproStats 10 s.
+- Long hold: NALTP 8 s, TagproStats 10 s, TagPro Reference over 10 s.
 - Flaccid: Bambi's estimate of about 3–4 s.
-- Return in base: RankedStatsCollector 5.5 tiles.
+- Return in base: RankedStatsCollector 5.5 tiles, TagPro Reference 10 tiles.
 - Prevent: real definition unconfirmed; tagpro-local uses its own 8-tile version.

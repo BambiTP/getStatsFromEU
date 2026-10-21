@@ -33,13 +33,13 @@ const { pipeline } = require('stream/promises');
 const decoder = require('./decoder.js');
 
 const FPS = 60;
-const LONG_HOLD = 8 * FPS;        // a hold this long or longer (community estimate, not published)
+const LONG_HOLD = 20 * FPS;       // a hold this long or longer (matches the league's numbers)
 const FLACCID = 2 * FPS;          // a grab lost sooner than this
-const HANDOFF = 2 * FPS;          // a teammate picks the flag up this soon after the hold ended
-const HANDOFF_HOLD = 3 * FPS;     // ...off a hold no longer than this
+const HANDOFF = 2 * FPS;          // a teammate picks the flag up sooner than this after the hold ended
+const HANDOFF_HOLD = 3 * FPS;     // ...off a hold shorter than this
 const GOOD_HOLD = 5 * FPS;        // ...and holds it longer than this: a good handoff
 const QUICK = 2 * FPS;            // a return of a hold shorter than this
-const KEY = 3 * FPS;              // a return the team capped within this long after
+const KEY = 3 * FPS;              // the last return before a cap, if it came less than this before
 const NEAR = 6 * 40;              // six tiles, in pixels: return in base / save radius
 const MATCH_TOL = 2;              // frames allowed between a return and the splat or drop it caused
 
@@ -361,8 +361,8 @@ function matchStats(id, raw, maps) {
   for (const h of holds) {
     const prev = last[h.side];
     h.from = '';
-    if (prev && prev.how !== 'cap' && h.start - prev.end >= 0 && h.start - prev.end <= HANDOFF) {
-      if (prev.end - prev.start <= HANDOFF_HOLD && prev.player !== h.player) { h.from = 'handoff'; h.giver = prev.player; }
+    if (prev && prev.how !== 'cap' && h.start - prev.end >= 0 && h.start - prev.end < HANDOFF) {
+      if (prev.end - prev.start < HANDOFF_HOLD && prev.player !== h.player) { h.from = 'handoff'; h.giver = prev.player; }
       else h.from = 'regrab';
     }
     last[h.side] = h;
@@ -398,11 +398,16 @@ function matchStats(id, raw, maps) {
   const stands = flagStands(m.map && m.map.tiles);
   const capsBySide = { 1: [], 2: [] };
   for (const h of holds) if (h.how === 'cap' && capsBySide[h.side]) capsBySide[h.side].push(h.end);
+  // key return: each cap credits the team's last return before it, if that came less than KEY before
+  for (const side of [1, 2]) for (const c of capsBySide[side]) {
+    let last = null;
+    for (const r of returns) if (r.side === side && r.time <= c && (!last || r.time >= last.time)) last = r;
+    if (last && c - last.time < KEY) ps[last.player].kr++;
+  }
   for (const r of returns) {
     const s = ps[r.player], mine = r.side, theirs = 3 - mine;
     const stopped = holds.find((h) => h.side !== mine && Math.abs(h.end - r.time) <= MATCH_TOL && (h.how === 'drop' || h.how === 'pop'));
     if (stopped && stopped.end - stopped.start < QUICK) s.qr++;
-    if ((capsBySide[mine] || []).some((c) => c - r.time >= 0 && c - r.time <= KEY)) s.kr++;
     const at = splats.find((sp) => sp.side === theirs && Math.abs(sp.time - r.time) <= MATCH_TOL);
     if (at) {
       const near = (p) => p && (at.x - p[0]) ** 2 + (at.y - p[1]) ** 2 <= NEAR ** 2;
