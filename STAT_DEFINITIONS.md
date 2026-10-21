@@ -86,6 +86,15 @@ Ratios (RankedStatsCollector)
 - Support = button ÷ 5 + (block ÷ 5) × 2 (whole-number division).
 - Every stat per minute and per 8 minutes. Win % overall and on red / blue.
 
+MLTP's stats page (tagproleague.com/MLTP/stats, column tooltips) uses the same definitions:
+flaccid = a grab with under 2 s of hold, handoff = a teammate grabs within 2 s of a hold under 3 s,
+good handoff = the teammate then holds over 5 s, quick return = the enemy held under 2 s,
+key return = your team caps within 3 s of the return. It defines a save only as "a return when the
+enemy was about to capture", and it doesn't say how long a long hold is. Its extra columns:
+- **Spark %**: the share of captures from grabs the player made themselves, not from a regrab or handoff:
+  (caps − caps off handoffs − caps off regrabs) ÷ caps.
+- **Kept flags (KF)**, **PM** (cap difference), **hold against per minute**.
+
 TagproStats extras
 - Kept flags = grabs − drops − caps. Cap difference. Hold and prevent for and against. Win = 1, loss = 0, tie = 2.
 

@@ -456,11 +456,12 @@ function rates(r) {
     prevent_per_hold_against: round(div(r.prevent, r.hold_against)),
     pup_pct: round(div(r.pups, r.pups_available) * 100),
     flaccid_pct: round(div(r.flaccids, r.grabs) * 100), chain_pct: round(div(r.good_handoffs, r.handoffs) * 100),
+    spark_pct: round(div(r.captures - r.caps_off_handoffs - r.caps_off_regrabs, r.captures) * 100),
     qr_pct: round(div(r.quick_returns, r.returns) * 100), rib_pct: round(div(r.returns_in_base, r.returns) * 100),
     support: Math.floor(r.button / 5) + Math.floor(r.block / 5) * 2,
     cpm: pm('captures'), gpm: pm('grabs'), rpm: pm('returns'), tpm: pm('tags'), ppm: pm('pops'),
     dpm: pm('drops'), pupm: pm('pups'), hold_pm: pm('hold'), prevent_pm: pm('prevent'), nrtpm: pm('nr_tags'),
-    cd_pm: pm('cap_diff'),
+    hold_against_pm: pm('hold_against'), cd_pm: pm('cap_diff'),
   };
 }
 
