@@ -1,19 +1,12 @@
-// The only things the window can ask the main process for.
+// Desktop app: what the page (app.js) is allowed to ask the Electron main process for.
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('api', {
-  defaults: () => ipcRenderer.invoke('defaults'),
-  pick: (opts) => ipcRenderer.invoke('pick', opts),
-  coverage: (where, ranges) => ipcRenderer.invoke('coverage', where, ranges),
-  run: (opts) => ipcRenderer.invoke('run', opts),
-  stop: () => ipcRenderer.invoke('stop'),
-  readText: (p) => ipcRenderer.invoke('read-text', p),
-  writeText: (p, text) => ipcRenderer.invoke('write-text', p, text),
-  copy: (text) => ipcRenderer.invoke('copy', text),
-  paste: () => ipcRenderer.invoke('paste'),
-  openPath: (p) => ipcRenderer.invoke('open-path', p),
-  showInFolder: (p) => ipcRenderer.invoke('show-in-folder', p),
-  onLog: (fn) => ipcRenderer.on('log', (_e, msg) => fn(msg)),
-  onProgress: (fn) => ipcRenderer.on('progress', (_e, msg) => fn(msg)),
-  onDone: (fn) => ipcRenderer.on('done', (_e, msg) => fn(msg)),
+contextBridge.exposeInMainWorld('backend', {
+  isBrowser: false,
+  defaultPaths: () => ipcRenderer.invoke('default-paths'),
+  chooseFile: (kind, title, currentPath) => ipcRenderer.invoke('choose-file', kind, title, currentPath),
+  openFile: (filePath) => ipcRenderer.invoke('open-file', filePath),
+  startRun: (options) => ipcRenderer.invoke('start-run', options),
+  stopRun: () => ipcRenderer.invoke('stop-run'),
+  onRunEvent: (handler) => ipcRenderer.on('run-event', (event, type, data) => handler(type, data)),
 });

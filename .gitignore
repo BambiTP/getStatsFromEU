@@ -1,3 +1,5 @@
 cache/
 *.csv
+ctf_stats.json
+ctf_totals.json
 node_modules/

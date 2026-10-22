@@ -15,6 +15,7 @@
 //
 // Options:
 //   --out FILE        per player per match rows (.csv or .json)       default ctf_stats.csv
+//   --all             bulk mode: every match in the bulk file(s), no ids needed
 //   --no-matches      don't write the per-match file (use with --totals)
 //   --aliases FILE    combine players who used several names: one player per line, main name
 //                     first ("Main: alt, alt" or "Main, alt, alt"), or JSON {"Main": ["alt", ...]}
@@ -76,6 +77,7 @@ function parseArgs(argv) {
     else if (a === '--out') opt.out = next();
     else if (a === '--totals') opt.totals = next();
     else if (a === '--no-matches') opt.matches = false;
+    else if (a === '--all') opt.all = true;
     else if (a === '--aliases') opt.aliases = next();
     else if (a === '--all-modes') opt.allModes = true;
     else if (a === '--maps') opt.maps = next();
@@ -87,6 +89,7 @@ function parseArgs(argv) {
     else opt.specs.push(a);
   }
   if (!['bulk', 'site'].includes(opt.mode)) die('first argument must be "bulk" or "site"');
+  if (opt.all && opt.mode !== 'bulk') die('--all only works in bulk mode');
   if (!opt.matches && !opt.totals) die('--no-matches needs --totals, or there is nothing to write');
   return opt;
 }
@@ -127,7 +130,7 @@ function parseIds(specs) {
   const ids = new Set();
   for (const spec of specs) {
     const text = spec.replace(/[?&]match=/g, ' ');
-    for (const tok of text.split(/[\s,;]+/)) {
+    for (const tok of text.split(/[\s,;&#]+/)) {
       const range = tok.match(/^(\d+)\s*-\s*(\d+)$/);
       if (range) {
         let [a, b] = [Number(range[1]), Number(range[2])];
@@ -178,7 +181,7 @@ async function* scanBulk(file, wanted, maxId) {
   const stream = file.endsWith('.gz') ? src.pipe(zlib.createGunzip({ chunkSize: 1 << 20 })) : src;
   let buf = Buffer.alloc(0);
   let key = -1, open = false, body = 0;   // the current match: its id and where its { is in buf
-  const keeping = () => open && wanted.has(key);
+  const keeping = () => open && (wanted === null || wanted.has(key));   // wanted null: every match
   try {
     for await (const chunk of stream) {
       buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
@@ -211,7 +214,7 @@ async function* scanBulk(file, wanted, maxId) {
 // the bulk files that cover any of the ids, from a mirror's manifest.json or from file names
 // like matches_00000000_00124999.json.gz / bulk_4174512_4244514.json
 function bulkFiles(where, ids) {
-  const covers = (f) => ids.some((i) => f.first <= i && i <= f.last);
+  const covers = (f) => ids === null || ids.some((i) => f.first <= i && i <= f.last);
   if (fs.statSync(where).isFile()) return [where];
   const manifest = path.join(where, 'manifest.json');
   let files;
@@ -258,7 +261,7 @@ async function downloadBulk(ids, cache) {
 
 async function loadMaps(opt) {
   if (fs.existsSync(opt.maps)) return JSON.parse(fs.readFileSync(opt.maps, 'utf8'));
-  if (!opt.download) die(`no maps file at ${opt.maps}; pass --maps FILE or --download`);
+  console.error(`no maps file at ${opt.maps}; getting tagpro.eu's maps file once (kept in ${opt.cache})`);
   const file = path.join(opt.cache, 'maps.json');
   if (!fs.existsSync(file)) {
     fs.mkdirSync(opt.cache, { recursive: true });
@@ -272,6 +275,13 @@ async function loadMaps(opt) {
 
 async function* fromBulk(opt, ids) {
   const maps = await loadMaps(opt);
+  if (opt.all) {                                   // every match in the bulk file(s)
+    for (const file of bulkFiles(opt.bulk, null)) {
+      console.error(`reading ${file}`);
+      for await (const [id, raw] of scanBulk(file, null, Infinity)) if (raw && raw.players) yield [id, raw, maps];
+    }
+    return;
+  }
   const files = opt.download ? await downloadBulk(ids, opt.cache) : bulkFiles(opt.bulk, ids);
   if (!files.length) die(`no bulk file under ${opt.bulk} covers those ids (try --download)`);
   const want = new Set(ids), maxId = ids[ids.length - 1];
@@ -697,8 +707,9 @@ async function main() {
   const opt = parseArgs(process.argv.slice(2));
   delayMs = opt.delay;
   const ids = parseIds(opt.specs);
-  if (!ids.length) die('no match ids given');
-  console.error(`${ids.length} match id(s), ${ids[0]} to ${ids[ids.length - 1]}, from ${opt.mode === 'site' ? 'tagpro.eu one at a time' : 'bulk files'}`);
+  if (!ids.length && !opt.all) die('no match ids given (or --all for every match in the bulk file)');
+  if (opt.all) console.error(`every match in ${opt.bulk}`);
+  else console.error(`${ids.length} match id(s), ${ids[0]} to ${ids[ids.length - 1]}, from ${opt.mode === 'site' ? 'tagpro.eu one at a time' : 'bulk files'}`);
 
   const rows = [];
   let done = 0, skipped = 0, failed = 0;
@@ -709,7 +720,7 @@ async function main() {
     return (final) => {
       seen += final ? 0 : 1;
       const now = Date.now();
-      if (final || now - last > 200) { last = now; console.error(`@progress ${final ? ids.length : seen} ${ids.length}`); }
+      if (final || now - last > 200) { last = now; console.error(`@progress ${final && ids.length ? ids.length : seen} ${ids.length}`); }
     };
   })() : () => {};
   for await (const [id, raw, maps] of source) {
