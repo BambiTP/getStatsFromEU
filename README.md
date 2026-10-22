@@ -104,7 +104,9 @@ Then every time (from the `ui` folder):
    commas. Or paste many at once, one player per line: `NewName: OldName, SmurfName`,
    `OldName, SmurfName -> NewName` or `NewName, OldName, SmurfName`; their stats all go under NewName. If a
    name is already in the list, the others are added to that player.
-5. **Run**. The log shows progress; the results table shows the first 200 rows and "Open file" opens
+5. **Run**. The bar shows how far along it is and about how long is left. "Show log" shows what the
+   script is printing, "Save log…" saves it to a file, and "Past runs' logs" opens the folder where every
+   run's log is kept (the newest 50). The results table shows the first 200 rows and "Open file" opens
    the whole file.
 
 ### Command line

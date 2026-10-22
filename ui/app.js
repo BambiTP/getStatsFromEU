@@ -494,6 +494,7 @@ byId('run-button').onclick = async () => {
   byId('log-output').textContent = '';
   const answer = await window.backend.startRun(options);
   if (answer.error) { byId('status-text').textContent = answer.error; return; }
+  startProgress();
   if (!byId('log-output').textContent.startsWith('$ ')) addToLog('$ ' + answer.command + '\n');
   setRunning(true);
   byId('status-text').textContent = 'Running…';
@@ -503,26 +504,90 @@ byId('stop-button').onclick = () => window.backend.stopRun();
 
 window.backend.onRunEvent((type, data) => {
   if (type === 'log') addToLog(data.text);
-  else if (type === 'progress') {
-    byId('status-text').textContent = data.total ? `Running… ${data.seen} of ${data.total} matches` : `Running… ${data.seen} matches read`;
-  } else if (type === 'started') {
+  else if (type === 'progress') showProgress(data);
+  else if (type === 'started') {
     byId('log-output').textContent = '$ ' + data.command + '\n';
+    startProgress();
     setRunning(true);
     byId('status-text').textContent = 'Running…';
   } else if (type === 'state') {
     if (data.command) byId('log-output').textContent = '$ ' + data.command + '\n' + data.log;
-    if (data.running) { setRunning(true); byId('status-text').textContent = 'Running…'; }
+    if (data.running) { setRunning(true); startProgress(); byId('status-text').textContent = 'Running…'; }
     else if (data.lastResult) showResult(data.lastResult);
   } else if (type === 'done') showResult(data);
 });
+
+// ---------------------------------------------------------------- progress
+
+// the bar follows matches done when the number of matches is known, otherwise how much of the
+// bulk files has been read (every match in them); with neither it just shows it's busy
+let runStartedAt = 0;
+
+function startProgress() {
+  runStartedAt = Date.now();
+  byId('progress-row').hidden = false;
+  byId('run-progress').removeAttribute('value');
+  byId('progress-text').textContent = '';
+}
+
+function showProgress(data) {
+  if (!runStartedAt) startProgress();
+  const fraction = data.total ? data.seen / data.total : data.bytesTotal ? data.bytesRead / data.bytesTotal : null;
+  let text = data.total ? `${data.seen.toLocaleString()} of ${data.total.toLocaleString()} matches` : `${data.seen.toLocaleString()} matches`;
+  if (fraction !== null) {
+    byId('run-progress').value = Math.min(1, fraction);
+    text += ` (${Math.floor(Math.min(1, fraction) * 100)}%)`;
+    const seconds = (Date.now() - runStartedAt) / 1000;
+    if (fraction > 0.01 && fraction < 1 && seconds > 5) text += `, about ${timeLeft(seconds * (1 - fraction) / fraction)} left`;
+  }
+  byId('progress-text').textContent = text;
+}
+
+function timeLeft(seconds) {
+  if (seconds < 90) return `${Math.round(seconds)} seconds`;
+  if (seconds < 90 * 60) return `${Math.round(seconds / 60)} minutes`;
+  return `${(seconds / 3600).toFixed(1)} hours`;
+}
+
+// ---------------------------------------------------------------- log
+
+const SHOW_LOG_KEY = 'ctf-stats-show-log';
+
+function showLog(show) {
+  byId('log-output').hidden = !show;
+  byId('show-log-button').textContent = show ? 'Hide log' : 'Show log';
+  localStorage.setItem(SHOW_LOG_KEY, show ? '1' : '');
+  if (show) byId('log-output').scrollTop = byId('log-output').scrollHeight;
+}
+
+showLog(!!localStorage.getItem(SHOW_LOG_KEY));
+byId('show-log-button').onclick = () => showLog(byId('log-output').hidden);
+
+byId('save-log-button').hidden = !window.backend.saveText;
+byId('save-log-button').onclick = async () => {
+  const file = await window.backend.chooseFile('save', 'Save the log', 'ctf-stats-log.txt', ['txt']);
+  if (!file) return;
+  try {
+    await window.backend.saveText(file, byId('log-output').textContent);
+    byId('status-text').textContent = 'Log saved.';
+  } catch (error) {
+    byId('status-text').textContent = 'Could not save the log: ' + error.message;
+  }
+};
+
+// every run's log is also kept in a folder, for looking at earlier runs
+byId('open-logs-folder-button').hidden = !window.backend.openLogsFolder;
+byId('open-logs-folder-button').onclick = () => window.backend.openLogsFolder();
 
 // ---------------------------------------------------------------- results
 
 function showResult(result) {
   setRunning(false);
+  if (!result.stopped && result.exitCode === 0) byId('run-progress').value = 1;
+  runStartedAt = 0;
   lastResult = result;
   if (result.stopped) byId('status-text').textContent = 'Stopped.';
-  else if (result.exitCode !== 0) byId('status-text').textContent = 'Failed. See the log.';
+  else if (result.exitCode !== 0) { byId('status-text').textContent = 'Failed. See the log.'; showLog(true); }
   else byId('status-text').textContent = 'Done.';
   // show whichever output this run wrote, if the chosen one wasn't written
   if (!result[byId('results-choice').value]) byId('results-choice').value = result.combined ? 'combined' : 'perMatch';

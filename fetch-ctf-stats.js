@@ -273,8 +273,11 @@ let delayMs = 2000;
 // a JSON string (quotes there are escaped) - so the scanner jumps from one match start to the next
 // with Buffer.indexOf and only parses the matches it wants.
 const MATCH_START = Buffer.from('":{"server"');
+// bytes of bulk file read so far and in all (total is only known with --all), for the progress bar
+const bulkBytes = { read: 0, total: 0 };
 async function* scanBulk(file, wanted, maxId) {
   const src = fs.createReadStream(file, { highWaterMark: 1 << 20 });
+  src.on('data', (chunk) => { bulkBytes.read += chunk.length; });
   const stream = file.endsWith('.gz') ? src.pipe(zlib.createGunzip({ chunkSize: 1 << 20 })) : src;
   let buf = Buffer.alloc(0);
   let key = -1, open = false, body = 0;   // the current match: its id and where its { is in buf
@@ -385,6 +388,7 @@ async function* fromBulk(opt, ids) {
     if (!files.length) die(`no bulk files in ${opt.bulk.join(', ')}`);
     // a folder can hold files that overlap (a mirror's pieces and bigger copies): each match only once
     const seen = files.length > 1 ? new Set() : null;
+    bulkBytes.total = files.reduce((sum, file) => sum + fs.statSync(file).size, 0);
     for (const file of files) {
       console.error(`reading ${file}`);
       for await (const [id, text] of scanBulk(file, null, Infinity)) {
@@ -1053,13 +1057,14 @@ async function main() {
   const allModes = opt.allModes || !!(opt.filter && opt.filter.flat().some((c) => c.column === 'mode'));
   if (opt.filter) console.error(`filter: ${opt.filter.map((g) => g.map((c) => `${c.column} ${c.op} ${c.value}`).join(' and ')).join(' / or / ')}`);
   const source = opt.mode === 'site' ? fromSite(opt, ids) : fromBulk(opt, ids);
-  // CTF_PROGRESS=1 (set by the app): a "@progress seen total" line at most every 200 ms
+  // CTF_PROGRESS=1 (set by the app): a "@progress seen total bytesRead bytesTotal" line at most every
+  // 200 ms; total is 0 with --all, where the bulk bytes read show how far along it is
   const progress = process.env.CTF_PROGRESS ? (() => {
     let seen = 0, last = 0;
     return (final) => {
       seen += final ? 0 : 1;
       const now = Date.now();
-      if (final || now - last > 200) { last = now; console.error(`@progress ${final && ids.length ? ids.length : seen} ${ids.length}`); }
+      if (final || now - last > 200) { last = now; console.error(`@progress ${final && ids.length ? ids.length : seen} ${ids.length} ${final ? bulkBytes.total : bulkBytes.read} ${bulkBytes.total}`); }
     };
   })() : () => {};
   const take = (id, result) => {

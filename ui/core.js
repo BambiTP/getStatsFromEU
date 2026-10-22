@@ -18,7 +18,7 @@ const PREVIEW_ROWS = 200;
 //   aliases: [{ main, alts }],
 //   filters: [[{ column, op, value }, ...], ...]   (boxes of "and" conditions, "or" between boxes)
 // }
-// onEvent(type, data) gets 'log' { text }, 'progress' { seen, total } and 'done' { exitCode, stopped, ... }
+// onEvent(type, data) gets 'log' { text }, 'progress' { seen, total, bytesRead, bytesTotal } and 'done' { exitCode, stopped, ... }
 function startRun(options, onEvent) {
   const tempFiles = [];
   const tempFile = (name, text) => {
@@ -57,8 +57,10 @@ function startRun(options, onEvent) {
     const lines = (partialLine + chunk.toString()).split('\n');
     partialLine = lines.pop();
     for (const line of lines) {
-      const progress = line.match(/^@progress (\d+) (\d+)$/);
-      if (progress) onEvent('progress', { seen: Number(progress[1]), total: Number(progress[2]) });
+      const progress = line.match(/^@progress (\d+) (\d+)(?: (\d+) (\d+))?$/);
+      if (progress) {
+        onEvent('progress', { seen: Number(progress[1]), total: Number(progress[2]), bytesRead: Number(progress[3] || 0), bytesTotal: Number(progress[4] || 0) });
+      }
       else onEvent('log', { text: line + '\n' });
     }
   });

@@ -7,5 +7,7 @@ contextBridge.exposeInMainWorld('backend', {
   downloadMaps: (filePath) => ipcRenderer.invoke('download-maps', filePath),
   startRun: (options) => ipcRenderer.invoke('start-run', options),
   stopRun: () => ipcRenderer.invoke('stop-run'),
+  openLogsFolder: () => ipcRenderer.invoke('open-logs-folder'),
+  saveText: (filePath, text) => ipcRenderer.invoke('save-text', filePath, text),
   onRunEvent: (handler) => ipcRenderer.on('run-event', (event, type, data) => handler(type, data)),
 });

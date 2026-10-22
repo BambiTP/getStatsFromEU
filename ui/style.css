@@ -141,3 +141,11 @@ pre {
 .filters-toggle-row {
   margin-bottom: 16px;
 }
+
+#run-progress {
+  width: 300px;
+}
+
+[hidden] {
+  display: none !important;
+}

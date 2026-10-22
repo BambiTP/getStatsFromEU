@@ -1,5 +1,6 @@
 // Desktop app (Electron): opens the window and shows the system's file dialogs. The work is in core.js.
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const fs = require('fs');
 const path = require('path');
 const core = require('./core');
 
@@ -39,14 +40,41 @@ ipcMain.handle('choose-file', async (event, kind, title, currentPath, extensions
 ipcMain.handle('open-file', (event, filePath) => shell.openPath(filePath));
 ipcMain.handle('download-maps', (event, filePath) => core.downloadMaps(filePath));
 
+// every run's log is kept as a text file in the logs folder (the newest 50)
+const logsFolder = () => path.join(app.getPath('userData'), 'logs');
+
+function saveRunLog(command, text) {
+  try {
+    fs.mkdirSync(logsFolder(), { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(logsFolder(), `run-${stamp}.txt`), '$ ' + command + '\n' + text);
+    const old = fs.readdirSync(logsFolder()).filter((f) => /^run-.*\.txt$/.test(f)).sort().slice(0, -50);
+    for (const f of old) fs.rmSync(path.join(logsFolder(), f), { force: true });
+  } catch (error) {
+    console.error('could not save the log: ' + error.message);
+  }
+}
+
 ipcMain.handle('start-run', (event, options) => {
   if (currentRun) return { error: 'A run is already going.' };
+  let logText = '';
   currentRun = core.startRun(options, (type, data) => {
-    if (type === 'done') currentRun = null;
+    if (type === 'log') logText += data.text;
+    if (type === 'done') {
+      saveRunLog(currentRun.command, logText);
+      currentRun = null;
+    }
     mainWindow.webContents.send('run-event', type, data);
   });
   return { command: currentRun.command };
 });
+
+ipcMain.handle('open-logs-folder', () => {
+  fs.mkdirSync(logsFolder(), { recursive: true });
+  return shell.openPath(logsFolder());
+});
+
+ipcMain.handle('save-text', (event, filePath, text) => fs.promises.writeFile(filePath, text));
 
 ipcMain.handle('stop-run', () => {
   if (currentRun) currentRun.child.kill();

@@ -124,9 +124,18 @@
     <button id="stop-button" type="button" disabled>Stop</button>
     <span id="status-text"></span>
   </div>
+  <div id="progress-row" class="button-row" hidden>
+    <progress id="run-progress" max="1"></progress>
+    <span id="progress-text"></span>
+  </div>
 
   <h2>Log</h2>
-  <pre id="log-output"></pre>
+  <div class="button-row">
+    <button id="show-log-button" type="button">Show log</button>
+    <button id="save-log-button" type="button">Save log…</button>
+    <button id="open-logs-folder-button" type="button">Past runs' logs</button>
+  </div>
+  <pre id="log-output" hidden></pre>
 
   <h2>Results</h2>
   <div class="button-row">
