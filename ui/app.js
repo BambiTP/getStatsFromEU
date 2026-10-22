@@ -73,7 +73,7 @@ async function chooseFileInto(inputId, kind, title, extensions, suggestedName) {
 // the bulk files: one path per line
 const bulkFilePaths = () => byId('bulk-file-path').value.split('\n').map((line) => line.trim()).filter((line) => line !== '');
 
-// adds the chosen files to the list (the browser version's picker gives one path, the desktop app's a list)
+// adds the chosen files to the list
 byId('choose-bulk-file-button').onclick = async () => {
   const current = bulkFilePaths();
   const chosen = await window.backend.chooseFile('open-many', 'Choose bulk match files', current[current.length - 1] || '', ['json', 'gz']);
@@ -540,7 +540,6 @@ function showResultsTable() {
   if (preview.error) { holder.textContent = preview.error; return; }
 
   byId('open-results-button').disabled = false;
-  byId('open-results-button').textContent = window.backend.isBrowser ? 'Download file' : 'Open file';
   byId('results-summary').textContent = preview.totalRows > preview.rows.length
     ? `First ${preview.rows.length} of ${preview.totalRows} rows`
     : `${preview.totalRows} rows`;
