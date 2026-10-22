@@ -33,20 +33,35 @@ Sources: tagpro-findings/SCOREBOARD.md, tagpro-local/engine/game.js (updateScore
 
 ## 3. League ratings
 
-Sources: naltp/season_stats.py, memory note reference_tagpro_stat_systems.md.
+Worked out from tagproleague.com's own GASP and NISH tables (MLTP S39: the season and each of the 7
+weeks). Fed the league's published stats, these formulas give exactly the league's GASP and NISH
+(offence, defence and total) for every player in every table. fetch-ctf-stats.js, working from
+tagpro.eu, matches all 29 players on all six numbers for the season, and 1002 of 1008 numbers week by
+week (the 6 misses are neighbours swapped where the league's input differs from tagpro.eu by one return
+or a few seconds of prevent).
 
-**GASP** (TagPro League)
+How both are built:
+- Only **regulation** counts: the league's season tables leave out clutch time and overtime (its minutes
+  are exactly 10 per game). Hold is the league hold of the regulation period; plus-minus is the cap
+  difference at the end of regulation. The combined stats have these as the `regulation_*` columns.
+- Each stat is a z-score over the players being rated (population standard deviation): the league rates
+  everyone in the table (same season and tier, that week or the whole season). fetch-ctf-stats.js rates
+  everyone in the output with at least 10 regulation minutes.
+- The weighted z-scores are added up, and the result is Excel's PERCENTRANK: the number of players below
+  ÷ (players − 1). So the leader gets exactly the top value and the last player 0.
+
+**GASP** (out of 10, two decimals)
 - Offence: caps per minute (2), score % (2), caps (5), hold (4).
-- Defence: returns per minute (2), tags per pop (1), non-return tags per minute (2), returns (4), prevent (4).
-- Each stat is a z-score against the league (same season and tier, population standard deviation).
-  The weighted sum becomes a percentile rank × 10, so 0 to 10, leader exactly 10.
+- Defence: returns per minute (2), K/D (2), non-return tags per minute (1), returns (4), prevent (4).
+- Total: offence sum + defence sum.
 - Caps, hold, returns and prevent are totals, so more minutes scores higher.
-- The NALTP reconstruction leaves out anyone under 10 minutes (our choice, not the league's).
 
-**NISH**
-- Same nine stats and weights, every one per minute (caps and returns are therefore counted twice).
-- About 30 minutes to qualify. Leader anchored at 100. Scaling below the leader was never documented;
-  the reconstruction uses a straight line from the lowest qualifier (0) to the highest (100).
+**NISH** (out of 100, whole numbers)
+- Offence: caps per minute (4), hold per minute (3), score % (2).
+- Defence: returns per minute (4), prevent per minute (4), K/D (1).
+- Total: offence sum + defence sum + 2 × plus-minus (its z-score).
+- These weights are the only whole-number ones up to 8 that give the league's numbers (doubling all of
+  them gives the same ranks).
 
 **SCAR** (TagPro Reference)
 - Value above a replacement player. The winning team gets +half the cap margin, the loser −half, split four ways.
@@ -55,8 +70,8 @@ Sources: naltp/season_stats.py, memory note reference_tagpro_stat_systems.md.
 - Splits into OSCAR (offence) and DSCAR (defence) by the game's offence/defence balance.
 - Only in the memory note (from Bambi's 17 Sep 2026 research write-up). No code computes it.
 
-All three are formula families: leagues use different weights, so anything computed here is a
-reconstruction, not a league's published number.
+SCAR is a formula family: anything computed from it is a reconstruction. GASP and NISH above are the
+league's own formulas.
 
 ## 4. Stats worked out from the match timeline
 
@@ -117,6 +132,16 @@ Defence
   is holding the flag (a teammate's hold that began less than half a second before the return
   doesn't count).
 - **Non-return tags** = tags − returns. **Non-drop pops** = pops − drops.
+
+TagPro Reference's versions (`tpr_key_returns`, `tpr_saves`), worked out from its own per-game numbers
+(the season data behind tagpro-reference.com/leaders/custom). They match it for every player in every
+regular-season game of MLTP S39 (840 player-games, fitted) and S38 (800, not fitted). Like the site's
+default view, they count regulation time only.
+- **TPR key return**: a return less than 2 s before a teammate's cap. Several returns by the same player
+  before the same cap count once.
+- **TPR save**: the returned carrier's splat, moved half a pixel right and down, is less than 6 tiles
+  (240 px) from the enemy flag's centre, and no teammate is holding the flag (a teammate's hold that ends
+  in the same frame as the return doesn't count).
 
 Hold
 - **League hold**: hold in whole seconds, leaving out a hold still running at the end of the game;

@@ -53,13 +53,19 @@ const RIB_RADIUS = 5 * 40;        // return in base: less than 5 tiles from your
 const SAVE_RADIUS = 2 * 40;       // save: less than 2 tiles from the enemy flag...
 const SAVE_LAG = FPS / 2;         // ...with no teammate holding (a hold begun this recently doesn't count)
 const MATCH_TOL = 2;              // frames allowed between a return and the splat or drop it caused
+// TagPro Reference (tagpro-reference.com): fitted to its per-game numbers, regulation time only
+const TPR_KEY = 2 * FPS;          // key return: less than this before a teammate's cap (once per cap)
+const TPR_SAVE_RADIUS = 6 * 40;   // save: the splat less than 6 tiles from the enemy flag's centre...
+const TPR_SPLAT_SHIFT = 0.5;      // ...measured from the splat moved half a pixel right and down
 
 // GASP (TagPro League) weights; NISH uses the same ones with the totals made per minute
+// GASP and NISH weights, fitted to tagproleague.com's published GASP and NISH tables
 const GASP_O = [['cpm', 2], ['score_pct', 2], ['captures', 5], ['hold', 4]];
-const GASP_D = [['rpm', 2], ['kd', 1], ['nrtpm', 2], ['returns', 4], ['prevent', 4]];
-const NISH_PER_MINUTE = { captures: 'cpm', hold: 'hold_pm', returns: 'rpm', prevent: 'prevent_pm' };
-const GASP_MIN_MINUTES = 10;
-const NISH_MIN_MINUTES = 30;
+const GASP_D = [['rpm', 2], ['kd', 2], ['nrtpm', 1], ['returns', 4], ['prevent', 4]];
+const NISH_O = [['cpm', 4], ['hold_pm', 3], ['score_pct', 2]];
+const NISH_D = [['rpm', 4], ['prevent_pm', 4], ['kd', 1]];
+const NISH_T_PLUS_MINUS = 2;      // NISH T = NISH O + NISH D + this x plus-minus
+const RATING_MIN_MINUTES = 10;    // one game
 
 const URL = 'https://tagpro.eu/data/';
 const UA = 'bambitp-ctf-stats/1.0 (one request at a time; see https://tagpro.eu/?science)';
@@ -361,10 +367,14 @@ function matchStats(id, raw, maps, allModes) {
     hold: 0, prevent: 0, button: 0, block: 0,
     pups: 0, jj: 0, rb: 0, tp: 0, ts: 0,
     lh: 0, flcds: 0, ho: 0, gho: 0, goh: 0, gor: 0, coh: 0, cor: 0, otcaps: 0, qr: 0, kr: 0, rib: 0, saves: 0,
+    tprKeyCaps: new Set(), tprSaves: 0,
     teamTime: { 1: 0, 2: 0 }, intervals: [],
+    reg: { tags: 0, pops: 0, grabs: 0, captures: 0, returns: 0, prevent: 0 },
   }));
 
   const holds = [], returns = [], popsByTeam = { 1: [], 2: [] };
+  // regulation: up to the time limit (the league's season tables, GASP and NISH only count this part)
+  const regEnd = limit && duration > limit ? limit : duration;
   m.players.forEach((p, idx) => {
     const s = ps[idx];
     let team = p.team || 0, since = team ? 0 : -1, hold = null;
@@ -380,6 +390,13 @@ function matchStats(id, raw, maps, allModes) {
     };
     for (const e of p.events) {
       const t = e.time;
+      if (t <= regEnd) {
+        if (e.type === 'grab') s.reg.grabs++;
+        else if (e.type === 'capture' || e.type === 'flaglessCapture') s.reg.captures++;
+        else if (e.type === 'drop' || e.type === 'pop') s.reg.pops++;
+        else if (e.type === 'return') { s.reg.returns++; s.reg.tags++; }
+        else if (e.type === 'tag') s.reg.tags++;
+      }
       switch (e.type) {
         case 'join': team = e.team; since = t; break;
         case 'switch': leave(t); team = e.team; since = t; break;
@@ -402,12 +419,17 @@ function matchStats(id, raw, maps, allModes) {
         case 'startBlock': open.block = t; break;
         case 'stopPrevent': case 'stopButton': case 'stopBlock': {
           const k = e.type.slice(4).toLowerCase();
-          if (open[k] >= 0) { s[k] += t - open[k]; open[k] = -1; }
+          if (open[k] >= 0) {
+            s[k] += t - open[k];
+            if (k === 'prevent') s.reg.prevent += Math.max(0, Math.min(t, regEnd) - open[k]);
+            open[k] = -1;
+          }
           break;
         }
       }
     }
     for (const k of Object.keys(open)) if (open[k] >= 0) s[k] += duration - open[k];
+    if (open.prevent >= 0) s.reg.prevent += Math.max(0, regEnd - open.prevent);
   });
 
   // each hold against the same side's hold before it (events in one frame are taken in player order,
@@ -489,6 +511,15 @@ function matchStats(id, raw, maps, allModes) {
       if (within(stands[mine], RIB_RADIUS)) s.rib++;
       const holding = holds.some((h) => h.side === mine && h.start <= r.time - SAVE_LAG && r.time <= h.end);
       if (!holding && within(stands[theirs], SAVE_RADIUS)) s.saves++;
+      // TagPro Reference's save: no teammate holding (a hold ending in this frame doesn't count)
+      const enemy = stands[theirs];
+      if (r.time <= regEnd && enemy && !holds.some((h) => h.side === mine && h.start <= r.time && r.time < h.end)
+        && (at.x + TPR_SPLAT_SHIFT - enemy[0]) ** 2 + (at.y + TPR_SPLAT_SHIFT - enemy[1]) ** 2 < TPR_SAVE_RADIUS ** 2) s.tprSaves++;
+    }
+    // TagPro Reference's key return: a return less than TPR_KEY before a teammate's cap, once per cap
+    if (r.time <= regEnd) {
+      const cap = (capsBySide[mine] || []).find((c) => c >= r.time && c - r.time < TPR_KEY);
+      if (cap !== undefined) s.tprKeyCaps.add(cap);
     }
   }
 
@@ -516,7 +547,7 @@ function matchStats(id, raw, maps, allModes) {
 
   // the league's hold: holds still running at the end left out, each period rounded to whole
   // seconds (halves up); hold against = the other team's league hold
-  const leagueHold = ps.map(() => 0);
+  const leagueHold = ps.map(() => 0), regulationHold = ps.map(() => 0);
   ps.forEach((s, i) => {
     for (let k = 0; k + 1 < bounds.length; k++) {
       let part = 0;
@@ -525,11 +556,14 @@ function matchStats(id, raw, maps, allModes) {
         part += Math.max(0, Math.min(h.end, bounds[k + 1]) - Math.max(h.start, bounds[k]));
       }
       if (part) leagueHold[i] += Math.floor(part / FPS + 0.5);
+      if (k === 0) regulationHold[i] = leagueHold[i];
     }
   });
   const firstTeam = ps.map((s) => s.intervals[0]?.team ?? 0);
 
   const teamScore = { 1: m.teams?.[0]?.score ?? 0, 2: m.teams?.[1]?.score ?? 0 };
+  const regScore = { 1: 0, 2: 0 };
+  for (const h of holds) if (h.how === 'cap' && h.end <= regEnd && regScore[h.side] !== undefined) regScore[h.side]++;
   const totalPups = ps.reduce((n, s) => n + s.pups, 0);
   const rows = ps.map((s, i) => {
     const team = s.teamTime[1] >= s.teamTime[2] ? (s.teamTime[1] ? 1 : 0) : 2;
@@ -552,9 +586,15 @@ function matchStats(id, raw, maps, allModes) {
       grabs_off_handoffs: s.goh, grabs_off_regrabs: s.gor,
       caps_off_handoffs: s.coh, caps_off_regrabs: s.cor, ot_caps: s.otcaps,
       quick_returns: s.qr, key_returns: s.kr, returns_in_base: s.rib, saves: s.saves,
+      tpr_key_returns: s.tprKeyCaps.size, tpr_saves: s.tprSaves,
       nr_tags: Math.max(0, s.tags - s.returns), nd_pops: Math.max(0, s.pops - s.drops),
       kept_flags: s.grabs - s.drops - s.captures, league_hold: leagueHold[i], hold_against: ha,
       eu_score: s.euScore, eu_points: s.euPoints,
+      regulation_minutes: round(s.intervals.reduce((a, iv) => a + Math.max(0, Math.min(iv.end, regEnd) - iv.start), 0) / FPS / 60),
+      regulation_tags: s.reg.tags, regulation_pops: s.reg.pops, regulation_grabs: s.reg.grabs,
+      regulation_caps: s.reg.captures, regulation_returns: s.reg.returns, regulation_hold: regulationHold[i],
+      regulation_prevent: round(s.reg.prevent / FPS),
+      regulation_cap_diff: team ? regScore[team] - regScore[3 - team] : 0,
     };
   });
   for (const r of rows) Object.assign(r, rates(r));
@@ -622,7 +662,9 @@ function scoreboard(rows, gameMinutes) {
 const SUMS = ['minutes', 'caps_for', 'caps_against', 'cap_diff', 'tags', 'pops', 'grabs', 'drops', 'captures',
   'returns', 'hold', 'prevent', 'button', 'block', 'pups', 'juke_juice', 'rolling_bomb', 'tagpro', 'top_speed',
   'pups_available', 'long_holds', 'flaccids', 'handoffs', 'good_handoffs', 'grabs_off_handoffs', 'grabs_off_regrabs', 'caps_off_handoffs', 'caps_off_regrabs',
-  'ot_caps', 'quick_returns', 'key_returns', 'returns_in_base', 'saves', 'nr_tags', 'nd_pops', 'kept_flags', 'league_hold', 'hold_against', 'eu_score', 'eu_points'];
+  'ot_caps', 'quick_returns', 'key_returns', 'returns_in_base', 'saves', 'tpr_key_returns', 'tpr_saves', 'nr_tags', 'nd_pops', 'kept_flags', 'league_hold', 'hold_against', 'eu_score', 'eu_points',
+  'regulation_minutes', 'regulation_tags', 'regulation_pops', 'regulation_grabs', 'regulation_caps', 'regulation_returns',
+  'regulation_hold', 'regulation_prevent', 'regulation_cap_diff'];
 
 // combined stats, added up one row at a time so memory stays small however many rows there are
 function makeTotals() {
@@ -656,7 +698,9 @@ function makeTotals() {
   };
 }
 
-// reconstructions over the players in this output, not tagproleague.com's published numbers
+// GASP and NISH the way tagproleague.com works them out, over the players in this output: each regulation stat
+// standardised over those players, weighted and added up, then Excel's PERCENTRANK (players below ÷
+// (players - 1)) of the sum: GASP out of 10, NISH out of 100
 function gaspNish(rows) {
   const standardise = (pool, keys) => {
     const z = pool.map(() => ({}));
@@ -668,30 +712,33 @@ function gaspNish(rows) {
     }
     return z;
   };
-  const pctRank = (values) => {
-    const order = values.slice().sort((a, b) => a - b), at = new Map();
-    order.forEach((v, i) => at.set(v, i + 1));
-    return values.map((v) => at.get(v) / values.length);
+  const percentRank = (values) => values.map((v) => values.filter((x) => x < v).length / (values.length - 1));
+  for (const r of rows) Object.assign(r, { gasp_o: '', gasp_d: '', gasp_t: '', nish_o: '', nish_d: '', nish_t: '' });
+
+  const pool = rows.filter((r) => r.regulation_minutes >= RATING_MIN_MINUTES);
+  if (pool.length < 2) return;
+  // the league's inputs: regulation stats only
+  const inputs = pool.map((r) => {
+    const pm = (x) => div(x, r.regulation_minutes);
+    return {
+      captures: r.regulation_caps, hold: r.regulation_hold, returns: r.regulation_returns, prevent: r.regulation_prevent,
+      cpm: pm(r.regulation_caps), hold_pm: pm(r.regulation_hold), rpm: pm(r.regulation_returns), prevent_pm: pm(r.regulation_prevent),
+      nrtpm: pm(r.regulation_tags - r.regulation_returns), score_pct: div(r.regulation_caps, r.regulation_grabs),
+      kd: div(r.regulation_tags, r.regulation_pops), cap_diff: r.regulation_cap_diff,
+    };
+  });
+  const keys = [...new Set([...GASP_O, ...GASP_D, ...NISH_O, ...NISH_D].map(([k]) => k)), 'cap_diff'];
+  const z = standardise(inputs, keys);
+  const sum = (zi, w) => w.reduce((a, [k, wt]) => a + wt * zi[k], 0);
+  const go = z.map((zi) => sum(zi, GASP_O)), gd = z.map((zi) => sum(zi, GASP_D));
+  const no = z.map((zi) => sum(zi, NISH_O)), nd = z.map((zi) => sum(zi, NISH_D));
+  const scores = {
+    gasp_o: go, gasp_d: gd, gasp_t: go.map((x, i) => x + gd[i]),
+    nish_o: no, nish_d: nd, nish_t: no.map((x, i) => x + nd[i] + NISH_T_PLUS_MINUS * z[i].cap_diff),
   };
-  for (const r of rows) Object.assign(r, { gasp_o: '', gasp_d: '', gasp_t: '', nish: '' });
-
-  const g = rows.filter((r) => r.minutes >= GASP_MIN_MINUTES);
-  if (g.length > 1) {
-    const keys = [...GASP_O, ...GASP_D].map(([k]) => k);
-    const z = standardise(g, keys);
-    const sum = (zi, w) => w.reduce((a, [k, wt]) => a + wt * zi[k], 0);
-    const o = z.map((zi) => sum(zi, GASP_O)), d = z.map((zi) => sum(zi, GASP_D)), t = o.map((x, i) => x + d[i]);
-    const [po, pd, pt] = [pctRank(o), pctRank(d), pctRank(t)];
-    g.forEach((r, i) => { r.gasp_o = round(po[i] * 10); r.gasp_d = round(pd[i] * 10); r.gasp_t = round(pt[i] * 10); });
-  }
-
-  const n = rows.filter((r) => r.minutes >= NISH_MIN_MINUTES);
-  if (n.length > 1) {
-    const w = [...GASP_O, ...GASP_D].map(([k, wt]) => [NISH_PER_MINUTE[k] || k, wt]);
-    const z = standardise(n, [...new Set(w.map(([k]) => k))]);
-    const raw = z.map((zi) => w.reduce((a, [k, wt]) => a + wt * zi[k], 0));
-    const hi = Math.max(...raw), lo = Math.min(...raw);
-    n.forEach((r, i) => { r.nish = round(hi > lo ? ((raw[i] - lo) / (hi - lo)) * 100 : 100, 1); });
+  for (const [column, values] of Object.entries(scores)) {
+    const ranks = percentRank(values), scale = column.startsWith('gasp') ? 10 : 100;
+    pool.forEach((r, i) => { r[column] = scale === 10 ? round(ranks[i] * 10) : Math.round(ranks[i] * 100); });
   }
 }
 

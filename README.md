@@ -12,7 +12,8 @@ several names can be combined.
 
 Each per-match row has the match number, date, map, color (red/blue), result (W/L/T), whether the
 game went to overtime or clutch time, and all the stats; the combined rows add wins, losses, ties
-and overtime wins/losses.
+and overtime wins/losses. GASP and NISH are the league's own formulas, and TagPro Reference's
+key returns and saves are there too.
 
 There are two ways to use it: the desktop app or the command line.
 
