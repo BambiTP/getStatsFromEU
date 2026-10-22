@@ -67,7 +67,8 @@ have, or download one yourself in a browser:
 Bulk files can be very large: the app reads them a piece at a time, so any size works.
 
 The maps file (`maps.json`) is downloaded from tagpro.eu automatically the first time. Downloads are
-kept in the `cache` folder so nothing is downloaded twice.
+kept in the `cache` folder so nothing is downloaded twice, except a range that reaches past
+tagpro.eu's newest match: that is downloaded again next time, to pick up the games played since.
 
 ## 3. Use it
 

@@ -64,7 +64,8 @@ ipcMain.handle('start-run', (event, options) => {
       saveRunLog(currentRun.command, logText);
       currentRun = null;
     }
-    mainWindow.webContents.send('run-event', type, data);
+    // the window may be gone (closed during a run)
+    if (!mainWindow.isDestroyed()) mainWindow.webContents.send('run-event', type, data);
   });
   return { command: currentRun.command };
 });

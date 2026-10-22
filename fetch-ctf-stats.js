@@ -93,11 +93,15 @@ function parseArgs(argv) {
   const opt = { mode: argv[0], specs: [], out: 'ctf_stats.csv', totals: null, allModes: false, aliases: null, matches: true,
     maps: path.join(MIRROR, 'maps.json'), bulk: [], download: false, cache: 'cache', delay: 2000,
     // past about 4 threads the reading and writing thread is the limit, and each thread holds the maps
-    threads: Math.max(1, Math.min(4, os.availableParallelism() - 1)) };
+    threads: Math.max(1, Math.min(4, (os.availableParallelism ? os.availableParallelism() : os.cpus().length) - 1)) };
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
     const next = () => { if (i + 1 >= argv.length) die(`${a} needs a value`); return argv[++i]; };
-    if (a === '--ids') opt.specs.push(fs.readFileSync(next(), 'utf8'));
+    if (a === '--ids') {
+      const file = next();
+      if (!fs.existsSync(file)) die(`no ids file at ${file}`);
+      opt.specs.push(fs.readFileSync(file, 'utf8'));
+    }
     else if (a === '--out') opt.out = next();
     else if (a === '--totals') opt.totals = next();
     else if (a === '--no-matches') opt.matches = false;
@@ -226,7 +230,7 @@ function passes(c, row, inGame) {
 function parseIds(specs) {
   const ids = new Set();
   for (const spec of specs) {
-    const text = spec.replace(/[?&]match=/g, ' ');
+    const text = spec.replace(/[?&]match=/g, ' ').replace(/(\d)\s*-\s*(\d)/g, '$1-$2');
     for (const tok of text.split(/[\s,;&#]+/)) {
       const range = tok.match(/^(\d+)\s*-\s*(\d+)$/);
       if (range) {
@@ -346,10 +350,12 @@ function bulkFilesIn(where, ids) {
     .sort((a, b) => (a.last - a.first) - (b.last - b.first)).map((f) => f.file);
 }
 
-// tagpro.eu's bulk endpoint, in pieces of at most 100,000 ids, saved gzipped under the cache
+// tagpro.eu's bulk endpoint, in pieces of at most 100,000 ids, saved gzipped under the cache.
+// A piece that reaches past tagpro.eu's newest match is only used for this run (fresh: deleted
+// afterwards), so asking again later gets the matches played since.
 async function downloadBulk(ids, cache) {
   fs.mkdirSync(cache, { recursive: true });
-  const out = [];
+  const out = [], fresh = [];
   const first = ids[0], last = ids[ids.length - 1];
   for (let a = first; a <= last; a += 100000) {
     const b = Math.min(a + 99999, last);
@@ -360,11 +366,21 @@ async function downloadBulk(ids, cache) {
       const res = await request(`bulk=matches&first=${a}&last=${b}`);
       if (!res.ok) throw new Error(`bulk download ${a}-${b} failed: HTTP ${res.status}`);
       await pipeline(res.body, zlib.createGzip(), fs.createWriteStream(file + '.part'));
+      let lastId = -1;
+      for await (const [id] of scanBulk(file + '.part', null, Infinity)) lastId = id;
+      // tagpro.eu has a few missing ids, but never a run of 1,000
+      if (lastId < b - 1000) {
+        const once = path.join(cache, `fresh_${process.pid}_${a}_${b}.json.gz`);
+        fs.renameSync(file + '.part', once);
+        fresh.push(once);
+        out.push(once);
+        continue;
+      }
       fs.renameSync(file + '.part', file);
     }
     out.push(file);
   }
-  return out;
+  return { files: out, fresh };
 }
 
 // the maps file to use: --maps, or tagpro.eu's downloaded once into the cache
@@ -398,17 +414,21 @@ async function* fromBulk(opt, ids) {
     }
     return;
   }
-  const files = opt.download ? await downloadBulk(ids, opt.cache) : bulkFiles(opt.bulk, ids);
+  const { files, fresh } = opt.download ? await downloadBulk(ids, opt.cache) : { files: bulkFiles(opt.bulk, ids), fresh: [] };
   if (!files.length) die(`no bulk file in ${opt.bulk.join(', ')} covers those ids (try --download)`);
   const want = new Set(ids), maxId = ids[ids.length - 1];
-  for (const file of files) {
-    if (!want.size) break;
-    console.error(`reading ${file}`);
-    for await (const [id, text] of scanBulk(file, want, maxId)) {
-      want.delete(id);
-      yield [id, text];
+  try {
+    for (const file of files) {
       if (!want.size) break;
+      console.error(`reading ${file}`);
+      for await (const [id, text] of scanBulk(file, want, maxId)) {
+        want.delete(id);
+        yield [id, text];
+        if (!want.size) break;
+      }
     }
+  } finally {
+    for (const file of fresh) fs.rmSync(file, { force: true });
   }
   if (want.size) console.error(`${want.size} of the ids were not in the bulk files (no such match, or not mirrored)`);
 }
