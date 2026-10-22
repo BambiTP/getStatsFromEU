@@ -90,10 +90,18 @@ Then every time (from the `ui` folder):
    "Download…" to save tagpro.eu's maps file somewhere and reuse it.
 2. **Which matches**: all matches in the bulk file, a range of ids, or a list (ids, ranges like
    `4307000-4307100`, or tagpro.eu links).
+   **Filters…** (optional) keeps only the rows you want. Each condition is a column, a comparison and a
+   value, e.g. *Time limit is 8* or *Teammates include any of PlayerTwo*. Every condition in a box has
+   to be true (and); "+ Or" adds another box, and a row is kept if any box is true. Conditions can use
+   the match (mode CTF or neutral flag, group or public, time limit, players in the game, server, map,
+   date, overtime, ...), the player (name, color, result, teammates, opponents, ...) or any stat.
+   There is no "ranked" column in tagpro.eu's data; public games with an 8 minute time limit and no
+   more than 8 players come close.
 3. **Output**: CSV or JSON; per-match stats and/or combined stats, and where to save them.
 4. **Combine names** (optional): "+ Add player", type the main name and their other names separated by
-   commas. Or paste many at once, one player per line: `NotEvenMex: mex, mex2`, `mex, mex2 -> NotEvenMex`
-   or `NotEvenMex, mex, mex2`. If a name is already in the list, the others are added to that player.
+   commas. Or paste many at once, one player per line: `NewName: OldName, SmurfName`,
+   `OldName, SmurfName -> NewName` or `NewName, OldName, SmurfName`; their stats all go under NewName. If a
+   name is already in the list, the others are added to that player.
 5. **Run**. The log shows progress; the results table shows the first 200 rows and "Open file" opens
    the whole file.
 
@@ -117,8 +125,29 @@ Then every time (from the `ui` folder):
 | `--no-matches` | only write the combined stats |
 | `--aliases FILE` | combine names: one player per line, `Main: alt, alt` or `alt, alt -> Main` |
 | `--all-modes` | keep non-CTF matches |
+| `--filter FILE` | keep only rows passing the conditions in FILE (below) |
 | `--delay MS` | site mode: wait between tagpro.eu requests (default 2000) |
 | `--threads N` | bulk mode: how many threads work out matches (default: CPU cores − 1, at most 4; `1` = no extra threads) |
+
+### Filter files
+
+One condition per line: a column, an operator and a value. All lines must be true; a line saying `or`
+starts another set, and a row is kept if any set is true. Example: PlayerOne's public 8 minute games with
+PlayerTwo on their team, or any game PlayerOne won by 3 or more:
+
+    player = PlayerOne
+    group = 0
+    time_limit = 8
+    teammates has any PlayerTwo
+    or
+    player = PlayerOne
+    cap_diff >= 3
+
+Operators: `=`, `!=`, `<`, `<=`, `>`, `>=`, `contains`, `!contains`, `one of` (comma list); for the name
+lists `teammates`, `opponents` and `in_game` (everyone in the match): `has any`, `has all`, `has none`.
+Any per-match column works, including `mode` (ctf, nf, other), `server`, `time_limit`, `game_minutes`,
+`players_in_game`, `finished`, `map_author` and `date` (YYYY-MM-DD). Filtering on `mode` takes in every
+game mode, not only CTF.
 
 ## Files
 

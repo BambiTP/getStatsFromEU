@@ -15,7 +15,8 @@ const PREVIEW_ROWS = 200;
 //   selection: 'all' | 'range' | 'list',         ('all' only with bulk-file)
 //   rangeFirst, rangeLast, idList,
 //   perMatchFile, combinedFile,                   (either may be empty, not both)
-//   aliases: [{ main, alts }]
+//   aliases: [{ main, alts }],
+//   filters: [[{ column, op, value }, ...], ...]   (boxes of "and" conditions, "or" between boxes)
 // }
 // onEvent(type, data) gets 'log' { text }, 'progress' { seen, total } and 'done' { exitCode, stopped, ... }
 function startRun(options, onEvent) {
@@ -39,6 +40,7 @@ function startRun(options, onEvent) {
   else args.push('--no-matches');
   if (options.combinedFile) args.push('--totals', options.combinedFile);
   if (options.aliases && options.aliases.length) args.push('--aliases', tempFile('aliases.json', JSON.stringify(options.aliases)));
+  if (options.filters && options.filters.length) args.push('--filter', tempFile('filters.json', JSON.stringify(options.filters)));
 
   // process.execPath is Electron; ELECTRON_RUN_AS_NODE makes it run the script as plain Node
   const child = spawn(process.execPath, args, {

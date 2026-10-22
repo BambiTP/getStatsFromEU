@@ -4,6 +4,7 @@
 const byId = (id) => document.getElementById(id);
 const SETTINGS_KEY = 'ctf-stats-settings';
 const NAMES_KEY = 'ctf-stats-names';
+const FILTERS_KEY = 'ctf-stats-filters';
 
 let lastResult = null;
 
@@ -188,6 +189,163 @@ byId('import-names-button').onclick = () => {
   byId('status-text').textContent = `Names: ${added} new player(s), ${merged} added to existing players.`;
 };
 
+// ---------------------------------------------------------------- filters
+
+// what a filter can look at: [column, label, kind]; kind decides the operators (yes/no columns are 1 or 0)
+const FILTER_COLUMNS = {
+  'The match': [
+    ['mode', 'Mode (ctf, nf, other)', 'text'], ['group', 'Group game (yes/no)', 'yesno'],
+    ['time_limit', 'Time limit (minutes)', 'number'], ['players_in_game', 'Players in the game (subs count)', 'number'],
+    ['game_minutes', 'Game length (minutes)', 'number'], ['finished', 'Finished (yes/no)', 'yesno'],
+    ['overtime', 'Went to overtime (yes/no)', 'yesno'], ['clutch_time', 'Had clutch time (yes/no)', 'yesno'],
+    ['date', 'Date (YYYY-MM-DD)', 'text'], ['map', 'Map', 'text'], ['map_author', 'Map author', 'text'],
+    ['server', 'Server (e.g. chicago2)', 'text'], ['match_id', 'Match id', 'number'],
+    ['in_game', 'Players in the game (names)', 'list'],
+  ],
+  'The player': [
+    ['player', 'Player', 'text'], ['played_as', 'Name used in that game', 'text'], ['auth', 'Registered name (yes/no)', 'yesno'],
+    ['color', 'Color (red, blue)', 'text'], ['teammates', 'Teammates', 'list'], ['opponents', 'Opponents', 'list'],
+    ['result', 'Result (W, L, T)', 'text'], ['minutes', 'Minutes played', 'number'],
+    ['caps_for', 'Team caps', 'number'], ['caps_against', 'Caps against', 'number'], ['cap_diff', 'Cap difference', 'number'],
+  ],
+  'The player\'s stats': ['tags', 'pops', 'grabs', 'drops', 'captures', 'returns', 'hold', 'prevent', 'button', 'block',
+    'pups', 'long_holds', 'flaccids', 'handoffs', 'good_handoffs', 'grabs_off_handoffs', 'grabs_off_regrabs',
+    'caps_off_handoffs', 'caps_off_regrabs', 'ot_caps', 'quick_returns', 'key_returns', 'returns_in_base', 'saves',
+    'tpr_key_returns', 'tpr_saves', 'nr_tags', 'nd_pops', 'kept_flags', 'league_hold', 'hold_against', 'score_pct', 'kd',
+    'hold_per_grab', 'cpm', 'hold_pm', 'rpm', 'prevent_pm', 'score', 'oscore', 'dscore'].map((c) => [c, c, 'number']),
+};
+const FILTER_KINDS = Object.fromEntries(Object.values(FILTER_COLUMNS).flat().map(([column, , kind]) => [column, kind]));
+const OPERATORS = {
+  number: ['=', '!=', '<', '<=', '>', '>=', 'one of'],
+  yesno: ['='],
+  text: ['=', '!=', 'contains', '!contains', 'one of', '<', '>'],
+  list: ['has any', 'has all', 'has none'],
+};
+const OPERATOR_LABELS = { '=': 'is', '!=': 'is not', '<': 'less than / before', '<=': 'at most', '>': 'more than / after',
+  '>=': 'at least', 'one of': 'is one of', 'contains': 'contains', '!contains': 'doesn\'t contain',
+  'has any': 'include any of', 'has all': 'include all of', 'has none': 'include none of' };
+
+// [[{ column, op, value }, ...], ...]: boxes of conditions
+let filterGroups = readSaved(FILTERS_KEY, []);
+
+function saveFilters() {
+  localStorage.setItem(FILTERS_KEY, JSON.stringify(filterGroups));
+  const count = filterGroups.flat().filter((c) => c.value.trim() !== '').length;
+  byId('filters-summary').textContent = count ? `${count} condition(s) in ${filterGroups.length} box(es).` : 'No filters: every row is kept.';
+}
+
+function newCondition() { return { column: 'player', op: '=', value: '' }; }
+
+function conditionRow(group, condition) {
+  const row = document.createElement('div');
+  row.className = 'button-row';
+
+  const columnSelect = document.createElement('select');
+  for (const [heading, columns] of Object.entries(FILTER_COLUMNS)) {
+    const optionGroup = document.createElement('optgroup');
+    optionGroup.label = heading;
+    for (const [column, label] of columns) optionGroup.append(new Option(label, column));
+    columnSelect.append(optionGroup);
+  }
+  columnSelect.value = condition.column;
+
+  const operatorSelect = document.createElement('select');
+  const valueInput = document.createElement('input');
+  valueInput.type = 'text';
+  valueInput.value = condition.value;
+
+  const fillOperators = () => {
+    const kind = FILTER_KINDS[condition.column] || 'text';
+    operatorSelect.textContent = '';
+    for (const op of OPERATORS[kind]) operatorSelect.append(new Option(OPERATOR_LABELS[op], op));
+    if (!OPERATORS[kind].includes(condition.op)) condition.op = OPERATORS[kind][0];
+    operatorSelect.value = condition.op;
+    valueInput.placeholder = kind === 'yesno' ? 'yes or no' : kind === 'list' ? 'name, another name' : condition.column === 'date' ? '2026-10-21' : '';
+  };
+  fillOperators();
+
+  columnSelect.onchange = () => { condition.column = columnSelect.value; fillOperators(); saveFilters(); };
+  operatorSelect.onchange = () => { condition.op = operatorSelect.value; saveFilters(); };
+  valueInput.oninput = () => { condition.value = valueInput.value; saveFilters(); };
+
+  const removeButton = document.createElement('button');
+  removeButton.type = 'button';
+  removeButton.textContent = 'Remove';
+  removeButton.onclick = () => {
+    group.splice(group.indexOf(condition), 1);
+    if (!group.length) filterGroups.splice(filterGroups.indexOf(group), 1);
+    saveFilters();
+    showFilters();
+  };
+
+  row.append(columnSelect, operatorSelect, valueInput, removeButton);
+  return row;
+}
+
+function showFilters() {
+  const holder = byId('filter-groups');
+  holder.textContent = '';
+  filterGroups.forEach((group, index) => {
+    if (index) {
+      const orLine = document.createElement('p');
+      orLine.className = 'filter-or';
+      orLine.textContent = 'OR';
+      holder.append(orLine);
+    }
+    const box = document.createElement('div');
+    box.className = 'filter-group';
+    const heading = document.createElement('p');
+    heading.className = 'hint';
+    heading.textContent = 'All of these:';
+    box.append(heading);
+    for (const condition of group) box.append(conditionRow(group, condition));
+    const andButton = document.createElement('button');
+    andButton.type = 'button';
+    andButton.textContent = '+ And';
+    andButton.onclick = () => { group.push(newCondition()); saveFilters(); showFilters(); };
+    box.append(andButton);
+    holder.append(box);
+  });
+}
+
+byId('show-filters-button').onclick = () => {
+  byId('filters-section').hidden = !byId('filters-section').hidden;
+  if (!byId('filters-section').hidden && !filterGroups.length) { filterGroups.push([newCondition()]); saveFilters(); showFilters(); }
+};
+byId('add-filter-group-button').onclick = () => { filterGroups.push([newCondition()]); saveFilters(); showFilters(); };
+byId('clear-filters-button').onclick = () => { filterGroups = []; saveFilters(); showFilters(); };
+
+const FILTER_OPS = ['has all', 'has any', 'has none', 'one of', '!contains', 'contains', '<=', '>=', '!=', '=', '<', '>'];
+
+byId('export-filters-button').onclick = () => {
+  byId('filters-text').value = filterGroups
+    .map((group) => group.filter((c) => c.value.trim() !== '').map((c) => `${c.column} ${c.op} ${c.value.trim()}`).join('\n'))
+    .filter((text) => text)
+    .join('\nor\n');
+};
+
+// the text form: "column operator value" per line, "or" between boxes
+byId('import-filters-button').onclick = () => {
+  const groups = [[]];
+  for (const raw of byId('filters-text').value.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.toLowerCase() === 'or') { groups.push([]); continue; }
+    const column = line.split(/[\s<>=!]/)[0];
+    const rest = line.slice(column.length).trim();
+    const op = FILTER_OPS.find((o) => rest.toLowerCase().startsWith(o));
+    if (!column || !op) { byId('status-text').textContent = `Filters: can't read "${line}".`; return; }
+    groups[groups.length - 1].push({ column, op, value: rest.slice(op.length).trim() });
+  }
+  filterGroups = groups.filter((group) => group.length);
+  saveFilters();
+  showFilters();
+  byId('status-text').textContent = 'Filters updated.';
+};
+
+// the filters to send with a run: conditions with a value, boxes with a condition
+const filtersForRun = () => filterGroups.map((group) => group.filter((c) => c.value.trim() !== '')).filter((group) => group.length);
+
 // ---------------------------------------------------------------- running
 
 function setRunning(running) {
@@ -223,6 +381,7 @@ byId('run-button').onclick = async () => {
     perMatchFile: byId('write-per-match-checkbox').checked ? byId('per-match-file-path').value.trim() : '',
     combinedFile: byId('write-combined-checkbox').checked ? byId('combined-file-path').value.trim() : '',
     aliases: byId('combine-names-checkbox').checked ? players.filter((player) => player.main.trim() && player.alts.length) : [],
+    filters: filtersForRun(),
   };
   const problem = problemWith(options);
   if (problem) { byId('status-text').textContent = problem; return; }
@@ -313,3 +472,5 @@ for (const name of SAVED_RADIOS) {
 loadSettings();
 updateForm();
 showNames();
+saveFilters();
+showFilters();

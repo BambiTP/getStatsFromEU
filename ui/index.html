@@ -51,6 +51,31 @@
     </div>
   </fieldset>
 
+  <div class="button-row filters-toggle-row">
+    <button id="show-filters-button" type="button">Filters…</button>
+    <span id="filters-summary" class="hint">No filters: every row is kept.</span>
+  </div>
+
+  <fieldset id="filters-section" hidden>
+    <legend>Filters</legend>
+    <p class="hint">Keep only the rows you want. Inside a box, every condition has to be true (and).
+      A row is kept if any box is true (or). Names follow "Combine names" below.
+      For lists of names, separate them with commas.</p>
+    <div id="filter-groups"></div>
+    <div class="button-row">
+      <button id="add-filter-group-button" type="button">+ Or: add another box</button>
+      <button id="clear-filters-button" type="button">Remove all filters</button>
+    </div>
+    <h3>As text</h3>
+    <p class="hint">One condition per line, like <code>time_limit = 8</code>; a line saying <code>or</code> starts the
+      next box. The same text works with the command line's <code>--filter</code>.</p>
+    <textarea id="filters-text" rows="5"></textarea>
+    <div class="button-row">
+      <button id="export-filters-button" type="button">Show filters as text</button>
+      <button id="import-filters-button" type="button">Use this text</button>
+    </div>
+  </fieldset>
+
   <fieldset id="output-section">
     <legend>3. Output</legend>
     <label for="output-format">Format</label>
@@ -81,8 +106,8 @@
     <button id="add-player-button" type="button">+ Add player</button>
     <h3>Add many at once</h3>
     <p class="hint">One player per line. Any of these work:
-      <code>NotEvenMex: mex, mex2</code> or <code>mex, mex2 -&gt; NotEvenMex</code> or
-      <code>NotEvenMex, mex, mex2</code> (first name is the main one).
+      <code>NewName: OldName, SmurfName</code> or <code>OldName, SmurfName -&gt; NewName</code> or
+      <code>NewName, OldName, SmurfName</code> (the first name is the one used in the stats).
       If a name is already in the list, the other names are added to that player.</p>
     <textarea id="names-text" rows="5"></textarea>
     <div class="button-row">

@@ -100,6 +100,9 @@ below always means the team's hold immediately before, by a different player.
 
 Match and result columns
 - **match_id** (the tagpro.eu match number), **date**, **map**, **color** (red or blue), **result** (W, L or T).
+- **map_author**, **mode** (ctf; nf = neutral flag, the map has a yellow flag; other), **server**,
+  **time_limit** (minutes), **game_minutes** (how long it really lasted), **finished**, **players_in_game**
+  (everyone who played, subs included), **teammates** and **opponents** (names, after combining names).
 - **overtime**: 1 if the game went to overtime. **clutch_time**: 1 if it had clutch time. Both match the
   league's own periods on all 205 S38/S39 Majors games (the league starts counting either one half a
   second after it begins).

@@ -20,7 +20,8 @@
 //   --aliases FILE    combine players who used several names, one player per line:
 //                     "Main: alt, alt", "alt, alt -> Main" or "Main, alt, alt"; or JSON {"Main": ["alt", ...]}
 //   --totals FILE     one row per player over all the matches, with rates and GASP/NISH (.csv or .json)
-//   --all-modes       keep non-CTF matches (Marsball, gravity, ...) instead of skipping them
+//   --all-modes       keep non-CTF matches (neutral flag, Marsball, ...) instead of skipping them
+//   --filter FILE     keep only the rows that pass these conditions (see "Filters" below)
 //   --maps FILE       tagpro.eu bulk maps file (bulk mode)               default ~/tagpro.eu/maps.json
 //   --bulk PATH       bulk file, or folder of bulk files (bulk mode)     default ~/tagpro.eu
 //   --download        bulk mode: fetch the id range from tagpro.eu's bulk endpoint into --cache first
@@ -29,6 +30,19 @@
 //   --threads N       bulk mode: work out matches on N threads           default CPU cores - 1, at most 4
 //
 // Timeline stats follow the TagPro League's own rules (STAT_DEFINITIONS.md section 4); thresholds below.
+//
+// Filters (--filter FILE): one condition per line, "column operator value". The lines of a group must
+// all be true (and); a line saying just "or" starts another group, and a row is kept if any group is
+// true. Any per-match column works, plus in_game (everyone in the match). For example, public 8 minute
+// games with no subs where PlayerOne was on PlayerTwo's team:
+//   group = 0
+//   time_limit = 8
+//   players_in_game <= 8
+//   player = PlayerOne
+//   teammates has any PlayerTwo
+// Operators: = != < <= > >= contains !contains "one of" (comma list); for teammates, opponents and
+// in_game: "has all", "has any", "has none" (comma lists). Text is compared ignoring capitals; dates
+// as YYYY-MM-DD. The app writes the same thing as JSON: [[{column, op, value}, ...], ...].
 
 const fs = require('fs');
 const path = require('path');
@@ -89,6 +103,7 @@ function parseArgs(argv) {
     else if (a === '--no-matches') opt.matches = false;
     else if (a === '--all') opt.all = true;
     else if (a === '--aliases') opt.aliases = next();
+    else if (a === '--filter') opt.filter = loadFilter(next());
     else if (a === '--all-modes') opt.allModes = true;
     else if (a === '--maps') opt.maps = next();
     else if (a === '--bulk') opt.bulk = next();
@@ -141,6 +156,61 @@ function loadAliases(file) {
 }
 
 // "100-200, 305 ?match=400" -> sorted unique ids. Links count as their match id.
+// ---------------------------------------------------------------- filters
+
+const FILTER_OPS = ['has all', 'has any', 'has none', 'one of', '!contains', 'contains', '<=', '>=', '!=', '=', '<', '>'];
+const LIST_COLUMNS = new Set(['teammates', 'opponents', 'in_game']);
+
+// a filter file -> [[{ column, op, value }, ...], ...]: groups of conditions that must all be true;
+// a row passes if any group does. Text (one condition per line, "or" between groups) or the app's JSON.
+function loadFilter(file) {
+  const text = fs.readFileSync(file, 'utf8').trim();
+  let groups;
+  if (text.startsWith('[')) groups = JSON.parse(text);
+  else {
+    groups = [[]];
+    const opPattern = FILTER_OPS.map((o) => o.replace(/[<>=!]/g, (c) => '\\' + c)).join('|');
+    for (const raw of text.split('\n')) {
+      const line = raw.replace(/#.*/, '').trim();
+      if (!line) continue;
+      if (line.toLowerCase() === 'or') { groups.push([]); continue; }
+      const m = line.match(new RegExp(`^(\\S+?)\\s*(${opPattern})\\s*(.*)$`, 'i'));
+      if (!m) die(`filter: can't read "${line}" (use: column operator value)`);
+      groups[groups.length - 1].push({ column: m[1], op: m[2].toLowerCase(), value: m[3].trim() });
+    }
+  }
+  groups = groups.map((g) => g.filter((c) => c && c.column)).filter((g) => g.length);
+  for (const c of groups.flat()) if (!FILTER_OPS.includes(c.op)) die(`filter: unknown operator "${c.op}"`);
+  return groups.length ? groups : null;
+}
+
+const filterList = (value) => String(value).split(',').map((x) => x.trim().toLowerCase()).filter((x) => x !== '');
+
+// does one row pass one condition? inGame: everyone in the match
+function passes(c, row, inGame) {
+  const value = c.column === 'in_game' ? inGame : row[c.column];
+  if (Array.isArray(value)) {
+    const names = value.map((n) => n.toLowerCase()), want = filterList(c.value);
+    const any = want.some((n) => names.includes(n));
+    if (c.op === 'has all') return want.every((n) => names.includes(n));
+    if (c.op === 'has none' || c.op === '!contains' || c.op === '!=') return !any;
+    return any;
+  }
+  if (typeof value === 'number') {
+    const num = (v) => (/^(yes|true)$/i.test(v) ? 1 : /^(no|false)$/i.test(v) ? 0 : Number(v));
+    if (c.op === 'one of') return filterList(c.value).map(num).includes(value);
+    const x = num(String(c.value).trim());
+    if (c.op === 'contains') return String(value).includes(String(c.value).trim());
+    if (c.op === '!contains') return !String(value).includes(String(c.value).trim());
+    return { '=': value === x, '!=': value !== x, '<': value < x, '<=': value <= x, '>': value > x, '>=': value >= x }[c.op] ?? false;
+  }
+  const text = String(value ?? '').toLowerCase(), x = String(c.value).trim().toLowerCase();
+  if (c.op === 'one of' || c.op === 'has any') return filterList(c.value).includes(text);
+  if (c.op === 'contains') return text.includes(x);
+  if (c.op === '!contains') return !text.includes(x);
+  return { '=': text === x, '!=': text !== x, '<': text < x, '<=': text <= x, '>': text > x, '>=': text >= x }[c.op] ?? false;
+}
+
 function parseIds(specs) {
   const ids = new Set();
   for (const spec of specs) {
@@ -219,7 +289,7 @@ async function* scanBulk(file, wanted, maxId) {
       if (keeping()) { buf = buf.subarray(body); body = 0; }
       else buf = buf.subarray(Math.max(0, buf.length - 32));
     }
-    if (keeping()) yield [key, buf.toString('utf8', body, buf.lastIndexOf(125) + 1)];
+    if (keeping()) yield [key, buf.toString('utf8', body, buf.lastIndexOf(125))];
   } finally {
     src.destroy();
     stream.destroy();
@@ -355,10 +425,19 @@ function flagStands(tiles) {
 
 // tagpro.eu's map "type" is mostly a label (ctf, -, b18, p16, ...); only these name other modes
 const OTHER_MODES = new Set(['nf', '2nf', 'mb', 'dtf']);
+const NEUTRAL_FLAG = 160;         // the yellow flag in a decoded map
 function isCtf(m) {
   if (m.map && OTHER_MODES.has(m.map.type)) return false;
   const s = flagStands(m.map && m.map.tiles);
   return !!(s[1] && s[2]);
+}
+// 'ctf', 'nf' (neutral flag) or 'other'
+function gameMode(m) {
+  if (isCtf(m)) return 'ctf';
+  const type = m.map && m.map.type;
+  if (type === 'nf' || type === '2nf') return 'nf';
+  if (type !== 'mb' && type !== 'dtf' && Array.isArray(m.map?.tiles) && m.map.tiles.some((row) => row.includes(NEUTRAL_FLAG))) return 'nf';
+  return 'other';
 }
 
 function matchStats(id, raw, maps, allModes) {
@@ -567,6 +646,7 @@ function matchStats(id, raw, maps, allModes) {
   const firstTeam = ps.map((s) => s.intervals[0]?.team ?? 0);
 
   const teamScore = { 1: m.teams?.[0]?.score ?? 0, 2: m.teams?.[1]?.score ?? 0 };
+  const mode = gameMode(m), playersInGame = ps.filter((s) => s.teamTime[1] + s.teamTime[2] > 0).length;
   const regScore = { 1: 0, 2: 0 };
   for (const h of holds) if (h.how === 'cap' && h.end <= regEnd && regScore[h.side] !== undefined) regScore[h.side]++;
   const totalPups = ps.reduce((n, s) => n + s.pups, 0);
@@ -578,8 +658,11 @@ function matchStats(id, raw, maps, allModes) {
     const capsFor = team ? teamScore[team] : 0, capsAgainst = team ? teamScore[3 - team] : 0;
     return {
       match_id: id, date: m.date ? new Date(m.date * 1000).toISOString().slice(0, 10) : '',
-      map: m.map?.name ?? '', official: m.official ? 1 : 0, group: m.group ? 1 : 0,
+      map: m.map?.name ?? '', map_author: m.map?.author ?? '', mode, official: m.official ? 1 : 0, group: m.group ? 1 : 0,
+      server: (m.server || '').replace(/^tagpro-/, '').replace(/\.koalabeast\.com$/, ''), time_limit: m.timeLimit ?? '',
+      game_minutes: round(duration / FPS / 60), finished: m.finished ? 1 : 0, players_in_game: playersInGame,
       player: s.name, played_as: s.name, auth: s.auth ? 1 : 0, color: team === 1 ? 'red' : team === 2 ? 'blue' : '',
+      teammates: '', opponents: '',
       result: !team ? '' : capsFor > capsAgainst ? 'W' : capsFor < capsAgainst ? 'L' : 'T',
       overtime: wentToOvertime ? 1 : 0, clutch_time: hadClutch ? 1 : 0,
       caps_for: capsFor, caps_against: capsAgainst, cap_diff: capsFor - capsAgainst,
@@ -781,32 +864,53 @@ function processMatch(id, text, maps, allModes) {
 // works out matches one after another: renames players (aliases), adds them to the combined stats,
 // and turns the rows into output lines. Used directly on one thread, and inside each worker thread.
 // take(seq, id, text) -> { lines, header, rows, renamed } or { skipped } or { error }
-function makeMatchWorker({ maps, allModes, aliases, json, totals }) {
-  let cols = null;
+function makeMatchWorker({ maps, allModes, aliases, json, totals, filter }) {
+  let cols = null, checked = false;
   return (seq, id, text) => {
     const result = processMatch(id, text, maps, allModes);
     if (result.error) return { error: result.error };
     if (!result.rows) return { skipped: true };
-    let renamed = 0, lines = '';
-    result.rows.forEach((r, i) => {
+    let renamed = 0, lines = '', kept = 0;
+    for (const r of result.rows) {
       const main = aliases && aliases.get(r.player.toLowerCase());
       if (main && main !== r.player) { r.player = main; renamed++; }
+    }
+    // teammates and opponents, under the combined names
+    const onTeam = { red: [], blue: [] };
+    for (const r of result.rows) if (onTeam[r.color]) onTeam[r.color].push(r.player);
+    const inGame = [...onTeam.red, ...onTeam.blue];
+    for (const r of result.rows) {
+      r.teammates = (onTeam[r.color] || []).filter((n) => n !== r.player);
+      r.opponents = r.color ? onTeam[r.color === 'red' ? 'blue' : 'red'] : [];
+    }
+    if (filter && !checked) {
+      checked = true;
+      const unknown = [...new Set(filter.flat().map((c) => c.column))].filter((k) => !(k in result.rows[0]) && k !== 'in_game');
+      if (unknown.length) return { fatal: `filter: no column called ${unknown.join(', ')}` };
+    }
+    result.rows.forEach((r, i) => {
+      const keep = !filter || filter.some((group) => group.every((c) => passes(c, r, inGame)));
+      r.teammates = r.teammates.join(' / ');
+      r.opponents = r.opponents.join(' / ');
+      if (!keep) return;
+      kept++;
       if (totals) totals.add(r, seq * 1000 + i);
       if (json === null) return;
       if (!cols && !json) cols = Object.keys(r);
       lines += (json ? JSON.stringify(r) : csvLine(r, cols)) + '\n';
     });
-    return { lines, header: cols ? cols.join(',') : null, rows: result.rows.length, renamed };
+    if (!kept) return { filteredOut: true, renamed };
+    return { lines, header: cols ? cols.join(',') : null, rows: kept, renamed };
   };
 }
 
 // a worker thread: loads the maps once, then works out each match it is sent; at the end it sends
 // back its share of the combined stats
 function workerMain() {
-  const { mapsFile: file, allModes, aliases, json, wantTotals } = workerData;
+  const { mapsFile: file, allModes, aliases, json, wantTotals, filter } = workerData;
   const maps = file ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
   const totals = wantTotals ? makeTotals() : null;
-  const take = makeMatchWorker({ maps, allModes, aliases: aliases && new Map(aliases), json, totals });
+  const take = makeMatchWorker({ maps, allModes, aliases: aliases && new Map(aliases), json, totals, filter });
   parentPort.on('message', (msg) => {
     if (msg.finish) parentPort.postMessage({ totals: totals ? totals.state() : null });
     else parentPort.postMessage({ seq: msg.seq, ...take(msg.seq, msg.id, msg.text) });
@@ -912,7 +1016,10 @@ async function main() {
   if (aliases) console.error(`aliases: ${aliases.size} names for ${new Set(aliases.values()).size} players`);
   const writer = opt.matches ? makeWriter(opt.out) : null;
   const combined = opt.totals ? makeTotals() : null;
-  let done = 0, skipped = 0, failed = 0, rowCount = 0, renamed = 0;
+  let done = 0, skipped = 0, failed = 0, rowCount = 0, renamed = 0, filteredOut = 0;
+  // a filter on the mode means every mode has to be worked out, so the filter can choose
+  const allModes = opt.allModes || !!(opt.filter && opt.filter.flat().some((c) => c.column === 'mode'));
+  if (opt.filter) console.error(`filter: ${opt.filter.map((g) => g.map((c) => `${c.column} ${c.op} ${c.value}`).join(' and ')).join(' / or / ')}`);
   const source = opt.mode === 'site' ? fromSite(opt, ids) : fromBulk(opt, ids);
   // CTF_PROGRESS=1 (set by the app): a "@progress seen total" line at most every 200 ms
   const progress = process.env.CTF_PROGRESS ? (() => {
@@ -925,8 +1032,10 @@ async function main() {
   })() : () => {};
   const take = (id, result) => {
     progress();
+    if (result.fatal) die(result.fatal);
     if (result.error) { failed++; console.error(`  ${id}: could not read (${result.error})`); return; }
     if (result.skipped) { skipped++; return; }
+    if (result.filteredOut) { filteredOut++; return; }
     done++;
     rowCount += result.rows;
     renamed += result.renamed;
@@ -939,7 +1048,7 @@ async function main() {
   const json = writer ? writer.json : null;
   let seq = 0;
   if (threads > 1) {
-    const pool = makePool(threads, { mapsFile: mapsPath, allModes: opt.allModes, aliases: aliases && [...aliases], json, wantTotals: !!combined });
+    const pool = makePool(threads, { mapsFile: mapsPath, allModes, aliases: aliases && [...aliases], json, wantTotals: !!combined, filter: opt.filter });
     const inFlight = [];
     for await (const [id, text] of source) {
       inFlight.push([id, pool.work(seq++, id, text)]);
@@ -949,14 +1058,15 @@ async function main() {
     for (const state of await pool.finish()) if (combined) combined.merge(state);
   } else {
     const maps = mapsPath ? JSON.parse(fs.readFileSync(mapsPath, 'utf8')) : null;
-    const work = makeMatchWorker({ maps, allModes: opt.allModes, aliases, json, totals: combined });
+    const work = makeMatchWorker({ maps, allModes, aliases, json, totals: combined, filter: opt.filter });
     for await (const [id, text] of source) take(id, work(seq++, id, text));
   }
   progress(true);
   if (writer) writer.close();
   if (aliases) console.error(`aliases: ${renamed} rows renamed`);
-  console.error(`${done} CTF match(es), ${rowCount} player rows${opt.matches ? ` -> ${opt.out}` : ''}` +
-    (skipped ? `; ${skipped} non-CTF skipped` : '') + (failed ? `; ${failed} unreadable` : ''));
+  console.error(`${done} match(es), ${rowCount} player rows${opt.matches ? ` -> ${opt.out}` : ''}` +
+    (skipped ? `; ${skipped} non-CTF skipped` : '') + (filteredOut ? `; ${filteredOut} with no rows passing the filter` : '') +
+    (failed ? `; ${failed} unreadable` : ''));
   if (combined) {
     const t = combined.finish();
     write(opt.totals, t);
