@@ -17,8 +17,8 @@
 //   --out FILE        per player per match rows (.csv or .json)       default ctf_stats.csv
 //   --all             bulk mode: every match in the bulk file(s), no ids needed
 //   --no-matches      don't write the per-match file (use with --totals)
-//   --aliases FILE    combine players who used several names: one player per line, main name
-//                     first ("Main: alt, alt" or "Main, alt, alt"), or JSON {"Main": ["alt", ...]}
+//   --aliases FILE    combine players who used several names, one player per line:
+//                     "Main: alt, alt", "alt, alt -> Main" or "Main, alt, alt"; or JSON {"Main": ["alt", ...]}
 //   --totals FILE     one row per player over all the matches, with rates and GASP/NISH (.csv or .json)
 //   --all-modes       keep non-CTF matches (Marsball, gravity, ...) instead of skipping them
 //   --maps FILE       tagpro.eu bulk maps file (bulk mode)               default ~/tagpro.eu/maps.json
@@ -108,7 +108,11 @@ function loadAliases(file) {
       const line = raw.trim();
       if (!line || line.startsWith('#')) continue;
       const colon = line.indexOf(':');
-      const names = colon > 0 ? [line.slice(0, colon), ...line.slice(colon + 1).split(',')] : line.split(',');
+      const arrow = line.indexOf('->');
+      let names;
+      if (arrow > 0) names = [line.slice(arrow + 2), ...line.slice(0, arrow).split(',')];     // alt, alt -> Main
+      else if (colon > 0) names = [line.slice(0, colon), ...line.slice(colon + 1).split(',')];  // Main: alt, alt
+      else names = line.split(',');                                                          // Main, alt, alt
       groups.push(names);
     }
   }
@@ -492,6 +496,7 @@ function matchStats(id, raw, maps, allModes) {
   // was held: play runs on until that hold ends), then overtime (tied at the limit, or tied by a
   // clutch-time cap)
   const bounds = [0];
+  let hadClutch = false, wentToOvertime = false;
   if (limit && duration > limit) {
     const capsBy = (t) => [1, 2].map((side) => holds.filter((h) => h.side === side && h.how === 'cap' && h.end <= t).length);
     const [a, b] = capsBy(limit);
@@ -501,8 +506,11 @@ function matchStats(id, raw, maps, allModes) {
       const clutchEnd = live.length ? Math.max(...live.map((h) => h.end)) : duration;
       bounds.push(limit);
       otFrom = clutchEnd;
+      // clutch time: a flag still held at the limit, play going on until it's capped or returned. The league
+      // only counts it from half a second past the limit (it seems to round times to whole seconds).
+      hadClutch = live.some((h) => h.how !== 'end') && clutchEnd - limit >= FPS / 2;
     }
-    if (otFrom < duration) bounds.push(otFrom);
+    if (duration - otFrom >= FPS / 2) { bounds.push(otFrom); wentToOvertime = true; }   // same half second as clutch time
   }
   bounds.push(duration);
 
@@ -532,8 +540,9 @@ function matchStats(id, raw, maps, allModes) {
     return {
       match_id: id, date: m.date ? new Date(m.date * 1000).toISOString().slice(0, 10) : '',
       map: m.map?.name ?? '', official: m.official ? 1 : 0, group: m.group ? 1 : 0,
-      player: s.name, played_as: s.name, auth: s.auth ? 1 : 0, team: team === 1 ? 'red' : team === 2 ? 'blue' : '',
+      player: s.name, played_as: s.name, auth: s.auth ? 1 : 0, color: team === 1 ? 'red' : team === 2 ? 'blue' : '',
       result: !team ? '' : capsFor > capsAgainst ? 'W' : capsFor < capsAgainst ? 'L' : 'T',
+      overtime: wentToOvertime ? 1 : 0, clutch_time: hadClutch ? 1 : 0,
       caps_for: capsFor, caps_against: capsAgainst, cap_diff: capsFor - capsAgainst,
       minutes: round(minutes),
       tags: s.tags, pops: s.pops, grabs: s.grabs, drops: s.drops, captures: s.captures, returns: s.returns,
@@ -577,7 +586,7 @@ function rates(r) {
 // the in-game scoreboard score (IPMv1.1, as tagpro-local copies it from the real client): each
 // stat compared with the other eligible players in the same match, weighted, rescaled to 50 +- 20
 function scoreboard(rows, gameMinutes) {
-  const elig = rows.filter((r) => r.team && r.minutes >= 0.5 && div(r.minutes, gameMinutes) >= 0.15);
+  const elig = rows.filter((r) => r.color && r.minutes >= 0.5 && div(r.minutes, gameMinutes) >= 0.15);
   for (const r of rows) r.score = r.oscore = r.dscore = '';
   if (!elig.length) return;
   const stat = {
@@ -623,12 +632,13 @@ function makeTotals() {
       const k = r.player.toLowerCase();
       let t = byPlayer.get(k);
       if (!t) {
-        t = { player: r.player, names: new Set(), games: 0, wins: 0, losses: 0, ties: 0, ...Object.fromEntries(SUMS.map((s) => [s, 0])), scoreSum: 0, scoreCount: 0 };
+        t = { player: r.player, names: new Set(), games: 0, wins: 0, losses: 0, ties: 0, ot_wins: 0, ot_losses: 0, ...Object.fromEntries(SUMS.map((s) => [s, 0])), scoreSum: 0, scoreCount: 0 };
         byPlayer.set(k, t);
       }
       t.games++;
       t.names.add(r.played_as ?? r.player);
       if (r.result === 'W') t.wins++; else if (r.result === 'L') t.losses++; else if (r.result === 'T') t.ties++;
+      if (r.overtime && r.result === 'W') t.ot_wins++; else if (r.overtime && r.result === 'L') t.ot_losses++;
       for (const s of SUMS) t[s] += r[s];
       if (r.score !== '') { t.scoreSum += r.score; t.scoreCount++; }
     },

@@ -10,6 +10,10 @@ match in a bulk file, a range of match ids, or a list of ids. The results are sa
 one row per player per match, and/or one row per player with everything added up. Players who used
 several names can be combined.
 
+Each per-match row has the match number, date, map, color (red/blue), result (W/L/T), whether the
+game went to overtime or clutch time, and all the stats; the combined rows add wins, losses, ties
+and overtime wins/losses.
+
 There are two ways to use it: the desktop app or the command line.
 
 ## 1. Install
@@ -65,12 +69,14 @@ Then every time (from the `ui` folder):
 
 1. **Where the matches come from**: Bulk, either *from a bulk file on this computer* (choose the file)
    or *download from tagpro.eu*; or *individual matches* (one request every 2 seconds, so best for a
-   few hundred matches at most).
+   few hundred matches at most). For bulk you can choose a maps file you already have, or click
+   "Download…" to save tagpro.eu's maps file somewhere and reuse it.
 2. **Which matches**: all matches in the bulk file, a range of ids, or a list (ids, ranges like
    `4307000-4307100`, or tagpro.eu links).
 3. **Output**: CSV or JSON; per-match stats and/or combined stats, and where to save them.
 4. **Combine names** (optional): "+ Add player", type the main name and their other names separated by
-   commas. "Import / export as text" lets you copy the list or paste one in (`Main: alt, alt` per line).
+   commas. Or paste many at once, one player per line: `NotEvenMex: mex, mex2`, `mex, mex2 -> NotEvenMex`
+   or `NotEvenMex, mex, mex2`. If a name is already in the list, the others are added to that player.
 5. **Run**. The log shows progress; the results table shows the first 200 rows and "Open file" opens
    the whole file.
 
@@ -92,7 +98,7 @@ Then every time (from the `ui` folder):
 | `--out FILE` | per-match stats, `.csv` or `.json` |
 | `--totals FILE` | combined stats per player, `.csv` or `.json` |
 | `--no-matches` | only write the combined stats |
-| `--aliases FILE` | combine names: one player per line, `Main: alt, alt` |
+| `--aliases FILE` | combine names: one player per line, `Main: alt, alt` or `alt, alt -> Main` |
 | `--all-modes` | keep non-CTF matches |
 | `--delay MS` | site mode: wait between tagpro.eu requests (default 2000) |
 

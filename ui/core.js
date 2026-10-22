@@ -10,7 +10,8 @@ const PREVIEW_ROWS = 200;
 
 // options: {
 //   source: 'bulk-file' | 'bulk-download' | 'individual',
-//   bulkFile, mapsFile,                           (bulk-file only; mapsFile may be empty)
+//   bulkFile,                                    (bulk-file only)
+//   mapsFile,                                    (both bulk sources; may be empty)
 //   selection: 'all' | 'range' | 'list',         ('all' only with bulk-file)
 //   rangeFirst, rangeLast, idList,
 //   perMatchFile, combinedFile,                   (either may be empty, not both)
@@ -29,10 +30,8 @@ function startRun(options, onEvent) {
   const args = [SCRIPT];
   if (options.source === 'individual') args.push('site');
   else if (options.source === 'bulk-download') args.push('bulk', '--download');
-  else {
-    args.push('bulk', '--bulk', options.bulkFile);
-    if (options.mapsFile) args.push('--maps', options.mapsFile);
-  }
+  else args.push('bulk', '--bulk', options.bulkFile);
+  if (options.source !== 'individual' && options.mapsFile) args.push('--maps', options.mapsFile);
   if (options.selection === 'all') args.push('--all');
   else if (options.selection === 'range') args.push(`${options.rangeFirst}-${options.rangeLast}`);
   else args.push('--ids', tempFile('ids.txt', options.idList));
@@ -134,4 +133,20 @@ function splitCsvLine(line) {
   return cells;
 }
 
-module.exports = { startRun };
+// downloads tagpro.eu's maps file (one request) to `file`; returns { maps } or { error }
+async function downloadMaps(file) {
+  try {
+    const response = await fetch('https://tagpro.eu/data/?bulk=maps', {
+      headers: { 'User-Agent': 'bambitp-ctf-stats/1.0 (one request at a time; see https://tagpro.eu/?science)' },
+    });
+    if (!response.ok) return { error: `tagpro.eu answered ${response.status}` };
+    const text = await response.text();
+    const maps = Object.keys(JSON.parse(text)).length;   // make sure it's really the maps file
+    fs.writeFileSync(file, text);
+    return { maps };
+  } catch (error) {
+    return { error: error.message };
+  }
+}
+
+module.exports = { startRun, downloadMaps };

@@ -71,6 +71,18 @@ async function chooseFileInto(inputId, kind, title, extensions, suggestedName) {
 
 byId('choose-bulk-file-button').onclick = () => chooseFileInto('bulk-file-path', 'open', 'Choose a bulk match file', ['json', 'gz']);
 byId('choose-maps-file-button').onclick = () => chooseFileInto('maps-file-path', 'open', 'Choose the maps file', ['json']);
+
+// saves tagpro.eu's maps file wherever the user chooses, then uses it
+byId('download-maps-file-button').onclick = async () => {
+  const where = await window.backend.chooseFile('save', 'Save the tagpro.eu maps file as', byId('maps-file-path').value || 'maps.json', ['json']);
+  if (!where) return;
+  byId('status-text').textContent = 'Downloading the maps file from tagpro.eu…';
+  const answer = await window.backend.downloadMaps(where);
+  if (answer.error) { byId('status-text').textContent = 'Maps download failed: ' + answer.error; return; }
+  byId('maps-file-path').value = where;
+  saveSettings();
+  byId('status-text').textContent = `Maps file saved (${answer.maps} maps).`;
+};
 byId('choose-per-match-file-button').onclick = () => chooseFileInto('per-match-file-path', 'save', 'Save per-match stats as', [outputEnding()], 'ctf_stats.' + outputEnding());
 byId('choose-combined-file-button').onclick = () => chooseFileInto('combined-file-path', 'save', 'Save combined stats as', [outputEnding()], 'ctf_totals.' + outputEnding());
 
@@ -141,25 +153,39 @@ byId('copy-names-button').onclick = () => {
   byId('status-text').textContent = 'Names text copied.';
 };
 
-// "Main: alt, alt" lines; a main name already in the list gets the alts added to it
+// one line of bulk text -> [main, ...alts], or null for a blank line
+function parseNamesLine(line) {
+  const text = line.trim();
+  if (!text) return null;
+  const arrow = text.indexOf('->');
+  const colon = text.indexOf(':');
+  if (arrow > 0) return [text.slice(arrow + 2).trim(), ...splitNames(text.slice(0, arrow))];   // alt, alt -> Main
+  if (colon > 0) return [text.slice(0, colon).trim(), ...splitNames(text.slice(colon + 1))];   // Main: alt, alt
+  return splitNames(text);                                                                    // Main, alt, alt
+}
+
+// adds each line's names; if any of them is already a player's name, they all go to that player
 byId('import-names-button').onclick = () => {
-  let added = 0;
+  let added = 0, merged = 0;
   for (const line of byId('names-text').value.split('\n')) {
-    const colon = line.indexOf(':');
-    if (colon < 1) continue;
-    const main = line.slice(0, colon).trim();
-    const alts = splitNames(line.slice(colon + 1));
-    const existing = players.find((player) => player.main.toLowerCase() === main.toLowerCase());
+    const names = parseNamesLine(line);
+    if (!names || !names[0]) continue;
+    const lower = names.map((name) => name.toLowerCase());
+    const existing = players.find((player) => [player.main, ...player.alts].some((name) => lower.includes(name.toLowerCase())));
     if (existing) {
-      for (const alt of alts) if (!existing.alts.includes(alt)) existing.alts.push(alt);
+      for (const name of names) {
+        const known = [existing.main, ...existing.alts].map((n) => n.toLowerCase());
+        if (!known.includes(name.toLowerCase())) existing.alts.push(name);
+      }
+      merged++;
     } else {
-      players.push({ main, alts });
+      players.push({ main: names[0], alts: names.slice(1) });
       added++;
     }
   }
   saveNames();
   showNames();
-  byId('status-text').textContent = `Imported: ${added} new player(s).`;
+  byId('status-text').textContent = `Names: ${added} new player(s), ${merged} added to existing players.`;
 };
 
 // ---------------------------------------------------------------- running

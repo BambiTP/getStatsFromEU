@@ -83,6 +83,14 @@ How the league reads a match: each team's holds are taken in order of grab time,
 same frame are taken in player order (the order of players in the match file). A "teammate's hold"
 below always means the team's hold immediately before, by a different player.
 
+Match and result columns
+- **match_id** (the tagpro.eu match number), **date**, **map**, **color** (red or blue), **result** (W, L or T).
+- **overtime**: 1 if the game went to overtime. **clutch_time**: 1 if it had clutch time. Both match the
+  league's own periods on all 205 S38/S39 Majors games (the league starts counting either one half a
+  second after it begins).
+- Combined stats add **wins**, **losses**, **ties**, **ot_wins** and **ot_losses** (wins and losses in games
+  that went to overtime).
+
 Offence
 - **Long hold**: a hold longer than 20 s. A hold still running when the game ends doesn't count.
 - **Flaccid**: a hold shorter than 2 s that ends in a drop (not a cap, not the end of the game).

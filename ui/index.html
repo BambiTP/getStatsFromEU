@@ -22,14 +22,16 @@
           <input id="bulk-file-path" type="text" placeholder="No file chosen">
           <button id="choose-bulk-file-button" type="button">Choose…</button>
         </div>
-        <label for="maps-file-path">Maps file (optional: downloaded from tagpro.eu if left empty)</label>
-        <div class="path-row">
-          <input id="maps-file-path" type="text" placeholder="Download automatically">
-          <button id="choose-maps-file-button" type="button">Choose…</button>
-        </div>
       </div>
       <label><input type="radio" name="bulk-source" value="download"> Download from tagpro.eu</label>
       <p id="bulk-download-hint" class="hint indented">Downloads the matches in big pieces (fast) and keeps them in the app's "cache" folder for next time.</p>
+
+      <label for="maps-file-path">Maps file (optional: if left empty it's downloaded from tagpro.eu once and kept in the "cache" folder)</label>
+      <div class="path-row">
+        <input id="maps-file-path" type="text" placeholder="Download automatically">
+        <button id="choose-maps-file-button" type="button">Choose…</button>
+        <button id="download-maps-file-button" type="button">Download…</button>
+      </div>
     </div>
 
     <label><input type="radio" name="match-source" value="individual"> Individual matches (downloaded from tagpro.eu one at a time)</label>
@@ -77,16 +79,17 @@
       <tbody id="names-table-body"></tbody>
     </table>
     <button id="add-player-button" type="button">+ Add player</button>
-    <details>
-      <summary>Import / export as text</summary>
-      <p class="hint">One player per line, main name first: <code>Main: alt, alt</code></p>
-      <textarea id="names-text" rows="5"></textarea>
-      <div class="button-row">
-        <button id="export-names-button" type="button">Export list to text</button>
-        <button id="copy-names-button" type="button">Copy text</button>
-        <button id="import-names-button" type="button">Import text (adds to the list)</button>
-      </div>
-    </details>
+    <h3>Add many at once</h3>
+    <p class="hint">One player per line. Any of these work:
+      <code>NotEvenMex: mex, mex2</code> or <code>mex, mex2 -&gt; NotEvenMex</code> or
+      <code>NotEvenMex, mex, mex2</code> (first name is the main one).
+      If a name is already in the list, the other names are added to that player.</p>
+    <textarea id="names-text" rows="5"></textarea>
+    <div class="button-row">
+      <button id="import-names-button" type="button">Add to the list</button>
+      <button id="export-names-button" type="button">Show the list as text</button>
+      <button id="copy-names-button" type="button">Copy text</button>
+    </div>
   </fieldset>
 
   <div class="button-row">

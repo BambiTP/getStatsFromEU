@@ -35,6 +35,7 @@ ipcMain.handle('choose-file', async (event, kind, title, currentPath, extensions
 });
 
 ipcMain.handle('open-file', (event, filePath) => shell.openPath(filePath));
+ipcMain.handle('download-maps', (event, filePath) => core.downloadMaps(filePath));
 
 ipcMain.handle('start-run', (event, options) => {
   if (currentRun) return { error: 'A run is already going.' };
