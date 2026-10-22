@@ -15,6 +15,9 @@
 //
 // Options:
 //   --out FILE        per player per match rows (.csv or .json)       default ctf_stats.csv
+//   --no-matches      don't write the per-match file (use with --totals)
+//   --aliases FILE    combine players who used several names: one player per line, main name
+//                     first ("Main: alt, alt" or "Main, alt, alt"), or JSON {"Main": ["alt", ...]}
 //   --totals FILE     one row per player over all the matches, with rates and GASP/NISH (.csv or .json)
 //   --all-modes       keep non-CTF matches (Marsball, gravity, ...) instead of skipping them
 //   --maps FILE       tagpro.eu bulk maps file (bulk mode)               default ~/tagpro.eu/maps.json
@@ -64,7 +67,7 @@ const MIRROR = path.join(os.homedir(), 'tagpro.eu');
 // ---------------------------------------------------------------- arguments
 
 function parseArgs(argv) {
-  const opt = { mode: argv[0], specs: [], out: 'ctf_stats.csv', totals: null, allModes: false,
+  const opt = { mode: argv[0], specs: [], out: 'ctf_stats.csv', totals: null, allModes: false, aliases: null, matches: true,
     maps: path.join(MIRROR, 'maps.json'), bulk: MIRROR, download: false, cache: 'cache', delay: 2000 };
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
@@ -72,6 +75,8 @@ function parseArgs(argv) {
     if (a === '--ids') opt.specs.push(fs.readFileSync(next(), 'utf8'));
     else if (a === '--out') opt.out = next();
     else if (a === '--totals') opt.totals = next();
+    else if (a === '--no-matches') opt.matches = false;
+    else if (a === '--aliases') opt.aliases = next();
     else if (a === '--all-modes') opt.allModes = true;
     else if (a === '--maps') opt.maps = next();
     else if (a === '--bulk') opt.bulk = next();
@@ -82,7 +87,39 @@ function parseArgs(argv) {
     else opt.specs.push(a);
   }
   if (!['bulk', 'site'].includes(opt.mode)) die('first argument must be "bulk" or "site"');
+  if (!opt.matches && !opt.totals) die('--no-matches needs --totals, or there is nothing to write');
   return opt;
+}
+
+// players with several names -> Map(lower-cased name -> main name)
+function loadAliases(file) {
+  const text = fs.readFileSync(file, 'utf8');
+  const groups = [];
+  const t = text.trim();
+  if (t.startsWith('{') || t.startsWith('[')) {
+    const j = JSON.parse(t);
+    if (Array.isArray(j)) for (const g of j) groups.push([g.main, ...(g.alts || [])]);
+    else for (const [main, alts] of Object.entries(j)) groups.push([main, ...(alts || [])]);
+  } else {
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const colon = line.indexOf(':');
+      const names = colon > 0 ? [line.slice(0, colon), ...line.slice(colon + 1).split(',')] : line.split(',');
+      groups.push(names);
+    }
+  }
+  const map = new Map();
+  for (const g of groups) {
+    const names = g.map((n) => String(n ?? '').trim()).filter(Boolean);
+    if (!names.length) continue;
+    for (const n of names) {
+      const k = n.toLowerCase();
+      if (map.has(k) && map.get(k) !== names[0]) console.error(`aliases: "${n}" is listed under both "${map.get(k)}" and "${names[0]}"; using "${names[0]}"`);
+      map.set(k, names[0]);
+    }
+  }
+  return map;
 }
 
 // "100-200, 305 ?match=400" -> sorted unique ids. Links count as their match id.
@@ -485,7 +522,7 @@ function matchStats(id, raw, maps, allModes) {
     return {
       match_id: id, date: m.date ? new Date(m.date * 1000).toISOString().slice(0, 10) : '',
       map: m.map?.name ?? '', official: m.official ? 1 : 0, group: m.group ? 1 : 0,
-      player: s.name, auth: s.auth ? 1 : 0, team: team === 1 ? 'red' : team === 2 ? 'blue' : '',
+      player: s.name, played_as: s.name, auth: s.auth ? 1 : 0, team: team === 1 ? 'red' : team === 2 ? 'blue' : '',
       result: !team ? '' : capsFor > capsAgainst ? 'W' : capsFor < capsAgainst ? 'L' : 'T',
       caps_for: capsFor, caps_against: capsAgainst, cap_diff: capsFor - capsAgainst,
       minutes: round(minutes),
@@ -572,9 +609,10 @@ function totals(rows) {
   const by = new Map();
   for (const r of rows) {
     const k = r.player.toLowerCase();
-    if (!by.has(k)) by.set(k, { player: r.player, games: 0, wins: 0, losses: 0, ties: 0, ...Object.fromEntries(SUMS.map((s) => [s, 0])), _score: [] });
+    if (!by.has(k)) by.set(k, { player: r.player, names: new Set(), games: 0, wins: 0, losses: 0, ties: 0, ...Object.fromEntries(SUMS.map((s) => [s, 0])), _score: [] });
     const t = by.get(k);
     t.games++;
+    t.names.add(r.played_as ?? r.player);
     if (r.result === 'W') t.wins++; else if (r.result === 'L') t.losses++; else if (r.result === 'T') t.ties++;
     for (const s of SUMS) t[s] += r[s];
     if (r.score !== '') t._score.push(r.score);
@@ -583,6 +621,7 @@ function totals(rows) {
     for (const s of SUMS) t[s] = round(t[s]);
     const avg = t._score.length ? round(t._score.reduce((a, b) => a + b, 0) / t._score.length, 1) : '';
     delete t._score;
+    t.names = [...t.names].join(' / ');
     return { ...t, win_pct: round(div(t.wins, t.wins + t.losses + t.ties) * 100), avg_score: avg, ...rates(t) };
   });
   gaspNish(out);
@@ -664,7 +703,17 @@ async function main() {
   const rows = [];
   let done = 0, skipped = 0, failed = 0;
   const source = opt.mode === 'site' ? fromSite(opt, ids) : fromBulk(opt, ids);
+  // CTF_PROGRESS=1 (set by the desktop app): a "@progress seen total" line at most every 200 ms
+  const progress = process.env.CTF_PROGRESS ? (() => {
+    let seen = 0, last = 0;
+    return (final) => {
+      seen += final ? 0 : 1;
+      const now = Date.now();
+      if (final || now - last > 200) { last = now; console.error(`@progress ${final ? ids.length : seen} ${ids.length}`); }
+    };
+  })() : () => {};
   for await (const [id, raw, maps] of source) {
+    progress();
     try {
       const m = raw.map || !maps ? raw : { ...raw, map: maps[raw.mapId] };
       if (!opt.allModes && m.map && OTHER_MODES.has(m.map.type)) { skipped++; continue; }
@@ -677,8 +726,18 @@ async function main() {
       console.error(`  ${id}: could not read (${e.message})`);
     }
   }
-  write(opt.out, rows);
-  console.error(`${done} CTF match(es), ${rows.length} player rows -> ${opt.out}` +
+  if (opt.aliases) {
+    const aliases = loadAliases(opt.aliases);
+    let changed = 0;
+    for (const r of rows) {
+      const main = aliases.get(r.player.toLowerCase());
+      if (main && main !== r.player) { r.player = main; changed++; }
+    }
+    console.error(`aliases: ${aliases.size} names for ${new Set(aliases.values()).size} players; ${changed} rows renamed`);
+  }
+  progress(true);
+  if (opt.matches) write(opt.out, rows);
+  console.error(`${done} CTF match(es), ${rows.length} player rows${opt.matches ? ` -> ${opt.out}` : ''}` +
     (skipped ? `; ${skipped} non-CTF skipped` : '') + (failed ? `; ${failed} unreadable` : ''));
   if (opt.totals) {
     const t = totals(rows);
