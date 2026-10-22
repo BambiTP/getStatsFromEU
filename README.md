@@ -1,5 +1,21 @@
 # getStatsFromEU
 
+## How to update
+
+If you got the code with Git, open a terminal in the folder (PowerShell on Windows, Terminal on
+macOS and Linux) and run:
+
+    git pull
+    cd ui
+    npm install
+
+If you downloaded the ZIP: download it again from https://github.com/BambiTP/getStatsFromEU
+(**Code → Download ZIP**), unzip it, and move your old `cache` folder into the new folder so nothing
+has to be downloaded again. Then run `npm install` in its `ui` folder.
+
+`npm install` only matters for the desktop app, and it's quick when nothing changed. New installs
+start at section 1 below.
+
 CTF stats for TagPro matches from [tagpro.eu](https://tagpro.eu), worked out the same way the TagPro
 League does (long holds, handoffs, regrabs, returns in base, saves, ...). See `STAT_DEFINITIONS.md`
 for what every stat means.
@@ -102,6 +118,7 @@ Then every time (from the `ui` folder):
 | `--aliases FILE` | combine names: one player per line, `Main: alt, alt` or `alt, alt -> Main` |
 | `--all-modes` | keep non-CTF matches |
 | `--delay MS` | site mode: wait between tagpro.eu requests (default 2000) |
+| `--threads N` | bulk mode: how many threads work out matches (default: CPU cores − 1; `1` = no extra threads) |
 
 ## Files
 

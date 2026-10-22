@@ -26,6 +26,7 @@
 //   --download        bulk mode: fetch the id range from tagpro.eu's bulk endpoint into --cache first
 //   --cache DIR       where downloads are kept and reused               default ./cache
 //   --delay MS        wait between tagpro.eu requests                    default 2000
+//   --threads N       bulk mode: work out matches on N threads           default CPU cores - 1
 //
 // Timeline stats follow the TagPro League's own rules (STAT_DEFINITIONS.md section 4); thresholds below.
 
@@ -34,6 +35,7 @@ const path = require('path');
 const os = require('os');
 const zlib = require('zlib');
 const { pipeline } = require('stream/promises');
+const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const decoder = require('./decoder.js');
 
 const FPS = 60;
@@ -75,7 +77,8 @@ const MIRROR = path.join(os.homedir(), 'tagpro.eu');
 
 function parseArgs(argv) {
   const opt = { mode: argv[0], specs: [], out: 'ctf_stats.csv', totals: null, allModes: false, aliases: null, matches: true,
-    maps: path.join(MIRROR, 'maps.json'), bulk: MIRROR, download: false, cache: 'cache', delay: 2000 };
+    maps: path.join(MIRROR, 'maps.json'), bulk: MIRROR, download: false, cache: 'cache', delay: 2000,
+    threads: Math.max(1, os.availableParallelism() - 1) };
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
     const next = () => { if (i + 1 >= argv.length) die(`${a} needs a value`); return argv[++i]; };
@@ -91,6 +94,7 @@ function parseArgs(argv) {
     else if (a === '--download') opt.download = true;
     else if (a === '--cache') opt.cache = next();
     else if (a === '--delay') opt.delay = Number(next());
+    else if (a === '--threads') opt.threads = Math.max(1, Math.floor(Number(next())) || 1);
     else if (a.startsWith('--')) die(`unknown option ${a}`);
     else opt.specs.push(a);
   }
@@ -179,7 +183,7 @@ let delayMs = 2000;
 // ---------------------------------------------------------------- bulk files
 
 // Streams one bulk file ({"id": {match}, "id": {match}, ...}, plain or gzipped) and yields
-// [id, match] for the wanted ids only. Only the wanted matches are ever parsed, so a 125,000
+// [id, match text] for the wanted ids only. Only the wanted matches are ever parsed, so a 125,000
 // match file does not have to fit in memory. Ids in a bulk file run in order, so reading stops
 // once it is past the last wanted id.
 // Every match in a bulk file starts with "<id>":{"server" - a byte sequence that can't occur inside
@@ -204,7 +208,7 @@ async function* scanBulk(file, wanted, maxId) {
         at = m + 1;
         if (k === m || buf[k - 1] !== 34) continue;
         // the current match ends just before the comma ahead of this key
-        if (keeping()) yield [key, JSON.parse(buf.toString('utf8', body, k - 2))];
+        if (keeping()) yield [key, buf.toString('utf8', body, k - 2)];
         key = Number(buf.toString('latin1', k, m));
         if (key > maxId) return;
         open = true;
@@ -214,7 +218,7 @@ async function* scanBulk(file, wanted, maxId) {
       if (keeping()) { buf = buf.subarray(body); body = 0; }
       else buf = buf.subarray(Math.max(0, buf.length - 32));
     }
-    if (keeping()) yield [key, JSON.parse(buf.toString('utf8', body, buf.lastIndexOf(125)))];
+    if (keeping()) yield [key, buf.toString('utf8', body, buf.lastIndexOf(125) + 1)];
   } finally {
     src.destroy();
     stream.destroy();
@@ -269,8 +273,9 @@ async function downloadBulk(ids, cache) {
   return out;
 }
 
-async function loadMaps(opt) {
-  if (fs.existsSync(opt.maps)) return JSON.parse(fs.readFileSync(opt.maps, 'utf8'));
+// the maps file to use: --maps, or tagpro.eu's downloaded once into the cache
+async function mapsFile(opt) {
+  if (fs.existsSync(opt.maps)) return opt.maps;
   console.error(`no maps file at ${opt.maps}; getting tagpro.eu's maps file once (kept in ${opt.cache})`);
   const file = path.join(opt.cache, 'maps.json');
   if (!fs.existsSync(file)) {
@@ -280,15 +285,14 @@ async function loadMaps(opt) {
     if (!res.ok) throw new Error(`maps download failed: HTTP ${res.status}`);
     fs.writeFileSync(file, await res.text());
   }
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
+  return file;
 }
 
 async function* fromBulk(opt, ids) {
-  const maps = await loadMaps(opt);
   if (opt.all) {                                   // every match in the bulk file(s)
     for (const file of bulkFiles(opt.bulk, null)) {
       console.error(`reading ${file}`);
-      for await (const [id, raw] of scanBulk(file, null, Infinity)) if (raw && raw.players) yield [id, raw, maps];
+      yield* scanBulk(file, null, Infinity);
     }
     return;
   }
@@ -298,9 +302,9 @@ async function* fromBulk(opt, ids) {
   for (const file of files) {
     if (!want.size) break;
     console.error(`reading ${file}`);
-    for await (const [id, raw] of scanBulk(file, want, maxId)) {
+    for await (const [id, text] of scanBulk(file, want, maxId)) {
       want.delete(id);
-      if (raw && raw.players) yield [id, raw, maps];
+      yield [id, text];
       if (!want.size) break;
     }
   }
@@ -327,7 +331,7 @@ async function* fromSite(opt, ids) {
       fs.writeFileSync(file, text);
     }
     if (n % 25 === 0) console.error(`  ${n} of ${ids.length}`);
-    yield [id, JSON.parse(text), null];
+    yield [id, text];
   }
 }
 
@@ -666,30 +670,46 @@ const SUMS = ['minutes', 'caps_for', 'caps_against', 'cap_diff', 'tags', 'pops',
   'regulation_minutes', 'regulation_tags', 'regulation_pops', 'regulation_grabs', 'regulation_caps', 'regulation_returns',
   'regulation_hold', 'regulation_prevent', 'regulation_cap_diff'];
 
-// combined stats, added up one row at a time so memory stays small however many rows there are
+// combined stats, added up one row at a time so memory stays small however many rows there are.
+// order: the row's place in the whole run, so totals added up on several threads and merged come out
+// the same as on one (the name first seen is the one shown, and names are listed in the order seen).
+const COUNTS = ['games', 'wins', 'losses', 'ties', 'ot_wins', 'ot_losses', ...SUMS, 'scoreSum', 'scoreCount'];
 function makeTotals() {
   const byPlayer = new Map();
   return {
-    add(r) {
+    add(r, order) {
       const k = r.player.toLowerCase();
       let t = byPlayer.get(k);
       if (!t) {
-        t = { player: r.player, names: new Set(), games: 0, wins: 0, losses: 0, ties: 0, ot_wins: 0, ot_losses: 0, ...Object.fromEntries(SUMS.map((s) => [s, 0])), scoreSum: 0, scoreCount: 0 };
+        t = { player: r.player, first: order, names: new Map(), ...Object.fromEntries(COUNTS.map((c) => [c, 0])) };
         byPlayer.set(k, t);
       }
       t.games++;
-      t.names.add(r.played_as ?? r.player);
+      const name = r.played_as ?? r.player;
+      if (!t.names.has(name)) t.names.set(name, order);
       if (r.result === 'W') t.wins++; else if (r.result === 'L') t.losses++; else if (r.result === 'T') t.ties++;
       if (r.overtime && r.result === 'W') t.ot_wins++; else if (r.overtime && r.result === 'L') t.ot_losses++;
       for (const s of SUMS) t[s] += r[s];
       if (r.score !== '') { t.scoreSum += r.score; t.scoreCount++; }
     },
+    // another makeTotals' players (from state()), added into this one
+    merge(players) {
+      for (const [k, o] of players) {
+        const t = byPlayer.get(k);
+        if (!t) { byPlayer.set(k, o); continue; }
+        if (o.first < t.first) { t.player = o.player; t.first = o.first; }
+        for (const c of COUNTS) t[c] += o[c];
+        for (const [name, order] of o.names) if (!(t.names.get(name) <= order)) t.names.set(name, order);
+      }
+    },
+    state() { return [...byPlayer]; },
     finish() {
-      const out = [...byPlayer.values()].map((t) => {
+      const players = [...byPlayer.values()].sort((a, b) => a.first - b.first);
+      const out = players.map((t) => {
         for (const s of SUMS) t[s] = round(t[s]);
         const avg = t.scoreCount ? round(t.scoreSum / t.scoreCount, 1) : '';
-        const { scoreSum, scoreCount, ...rest } = t;
-        rest.names = [...t.names].join(' / ');
+        const { scoreSum, scoreCount, first, ...rest } = t;
+        rest.names = [...t.names].sort((a, b) => a[1] - b[1]).map(([name]) => name).join(' / ');
         return { ...rest, win_pct: round(div(t.wins, t.wins + t.losses + t.ties) * 100), avg_score: avg, ...rates(rest) };
       });
       gaspNish(out);
@@ -742,30 +762,126 @@ function gaspNish(rows) {
   }
 }
 
+// ---------------------------------------------------------------- working out matches, on threads
+
+// one match's text -> { rows } (null rows: not a CTF match) or { error }
+function processMatch(id, text, maps, allModes) {
+  try {
+    const raw = JSON.parse(text);
+    if (!raw || !raw.players) return { rows: null };
+    const map = raw.map || (maps && maps[raw.mapId]);
+    if (!allModes && map && OTHER_MODES.has(map.type)) return { rows: null };
+    return { rows: matchStats(id, raw, maps, allModes) };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+// works out matches one after another: renames players (aliases), adds them to the combined stats,
+// and turns the rows into output lines. Used directly on one thread, and inside each worker thread.
+// take(seq, id, text) -> { lines, header, rows, renamed } or { skipped } or { error }
+function makeMatchWorker({ maps, allModes, aliases, json, totals }) {
+  let cols = null;
+  return (seq, id, text) => {
+    const result = processMatch(id, text, maps, allModes);
+    if (result.error) return { error: result.error };
+    if (!result.rows) return { skipped: true };
+    let renamed = 0, lines = '';
+    result.rows.forEach((r, i) => {
+      const main = aliases && aliases.get(r.player.toLowerCase());
+      if (main && main !== r.player) { r.player = main; renamed++; }
+      if (totals) totals.add(r, seq * 1000 + i);
+      if (json === null) return;
+      if (!cols && !json) cols = Object.keys(r);
+      lines += (json ? JSON.stringify(r) : csvLine(r, cols)) + '\n';
+    });
+    return { lines, header: cols ? cols.join(',') : null, rows: result.rows.length, renamed };
+  };
+}
+
+// a worker thread: loads the maps once, then works out each match it is sent; at the end it sends
+// back its share of the combined stats
+function workerMain() {
+  const { mapsFile: file, allModes, aliases, json, wantTotals } = workerData;
+  const maps = file ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
+  const totals = wantTotals ? makeTotals() : null;
+  const take = makeMatchWorker({ maps, allModes, aliases: aliases && new Map(aliases), json, totals });
+  parentPort.on('message', (msg) => {
+    if (msg.finish) parentPort.postMessage({ totals: totals ? totals.state() : null });
+    else parentPort.postMessage({ seq: msg.seq, ...take(msg.seq, msg.id, msg.text) });
+  });
+}
+
+// threads workers sharing the matches; work(seq, id, text) returns a promise of the worker's result
+function makePool(threads, options) {
+  const waiting = new Map();
+  let next = 0;
+  const workers = Array.from({ length: threads }, () => {
+    const w = new Worker(__filename, { workerData: options });
+    w.on('message', (msg) => {
+      const key = msg.totals !== undefined ? `finish-${workers.indexOf(w)}` : msg.seq;
+      waiting.get(key)(msg); waiting.delete(key);
+    });
+    w.on('error', (e) => die(e.stack || e.message));
+    return w;
+  });
+  return {
+    work(seq, id, text) {
+      workers[next++ % threads].postMessage({ seq, id, text });
+      return new Promise((resolve) => waiting.set(seq, resolve));
+    },
+    // every worker's share of the combined stats, then the workers stop
+    async finish() {
+      const states = await Promise.all(workers.map((w, i) => new Promise((resolve) => {
+        waiting.set(`finish-${i}`, resolve);
+        w.postMessage({ finish: true });
+      })));
+      for (const w of workers) w.terminate();
+      return states.map((m) => m.totals);
+    },
+  };
+}
+
 // ---------------------------------------------------------------- output
 
 // writes rows to a .csv or .json file as they come, so they never all have to be in memory.
 // JSON is an array with one row per line.
+const csvCell = (v) => {
+  if (typeof v === 'number') return String(v);
+  const s = String(v ?? '');
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+function csvLine(r, cols) {
+  let line = '';
+  for (let j = 0; j < cols.length; j++) line += (j ? ',' : '') + csvCell(r[cols[j]]);
+  return line;
+}
+
 function makeWriter(file) {
   const json = file.endsWith('.json');
   const fd = fs.openSync(file, 'w');
-  let cols = null, block = '', count = 0;
-  const cell = (v) => {
-    if (typeof v === 'number') return String(v);
-    const s = String(v ?? '');
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
+  let cols = null, block = '', count = 0, headerDone = false;
   const flush = (force) => { if (block && (force || block.length > 1 << 20)) { fs.writeSync(fd, block); block = ''; } };
   return {
+    json,
     add(r) {
       if (json) block += (count ? ',\n' : '[\n') + JSON.stringify(r);
       else {
         if (!cols) { cols = Object.keys(r); block += cols.join(',') + '\n'; }
-        let line = '';
-        for (let j = 0; j < cols.length; j++) line += (j ? ',' : '') + cell(r[cols[j]]);
-        block += line + '\n';
+        block += csvLine(r, cols) + '\n';
       }
       count++;
+      flush(false);
+    },
+    // rows already made into lines (one per row, each ending in a newline) by makeMatchWorker
+    addLines(lines, header, rows) {
+      if (!rows) return;
+      if (json) block += (count ? ',\n' : '[\n') + lines.slice(0, -1).replace(/\n/g, ',\n');
+      else {
+        if (!headerDone) { block += header + '\n'; headerDone = true; }
+        block += lines;
+      }
+      count += rows;
       flush(false);
     },
     close() {
@@ -806,27 +922,34 @@ async function main() {
       if (final || now - last > 200) { last = now; console.error(`@progress ${final && ids.length ? ids.length : seen} ${ids.length}`); }
     };
   })() : () => {};
-  for await (const [id, raw, maps] of source) {
+  const take = (id, result) => {
     progress();
-    let got;
-    try {
-      const m = raw.map || !maps ? raw : { ...raw, map: maps[raw.mapId] };
-      if (!opt.allModes && m.map && OTHER_MODES.has(m.map.type)) { skipped++; continue; }
-      got = matchStats(id, raw, maps, opt.allModes);
-      if (!got) { skipped++; continue; }
-    } catch (e) {
-      failed++;
-      console.error(`  ${id}: could not read (${e.message})`);
-      continue;
-    }
+    if (result.error) { failed++; console.error(`  ${id}: could not read (${result.error})`); return; }
+    if (result.skipped) { skipped++; return; }
     done++;
-    for (const r of got) {
-      const main = aliases && aliases.get(r.player.toLowerCase());
-      if (main && main !== r.player) { r.player = main; renamed++; }
-      if (writer) writer.add(r);
-      if (combined) combined.add(r);
-      rowCount++;
+    rowCount += result.rows;
+    renamed += result.renamed;
+    if (writer) writer.addLines(result.lines, result.header, result.rows);
+  };
+  // bulk: the matches are worked out on threads while this thread reads the file; results are taken in
+  // match order. Site mode waits between downloads anyway, so it works on this thread.
+  const mapsPath = opt.mode === 'bulk' ? await mapsFile(opt) : null;
+  const threads = opt.mode === 'bulk' ? opt.threads : 1;
+  const json = writer ? writer.json : null;
+  let seq = 0;
+  if (threads > 1) {
+    const pool = makePool(threads, { mapsFile: mapsPath, allModes: opt.allModes, aliases: aliases && [...aliases], json, wantTotals: !!combined });
+    const inFlight = [];
+    for await (const [id, text] of source) {
+      inFlight.push([id, pool.work(seq++, id, text)]);
+      if (inFlight.length >= threads * 16) { const [i, p] = inFlight.shift(); take(i, await p); }
     }
+    for (const [i, p] of inFlight) take(i, await p);
+    for (const state of await pool.finish()) if (combined) combined.merge(state);
+  } else {
+    const maps = mapsPath ? JSON.parse(fs.readFileSync(mapsPath, 'utf8')) : null;
+    const work = makeMatchWorker({ maps, allModes: opt.allModes, aliases, json, totals: combined });
+    for await (const [id, text] of source) take(id, work(seq++, id, text));
   }
   progress(true);
   if (writer) writer.close();
@@ -840,4 +963,5 @@ async function main() {
   }
 }
 
-main().catch((e) => die(e.stack || e.message));
+if (isMainThread) main().catch((e) => die(e.stack || e.message));
+else workerMain();
