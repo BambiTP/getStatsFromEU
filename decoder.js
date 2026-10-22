@@ -260,6 +260,22 @@ function decodeSplats(base64Data, mapWidth, mapHeight) {
 
 // --- Core Processing Logic ---
 
+// most matches reuse a few hundred maps: decode each one once (the result is shared, read-only)
+const mapCache = new Map();
+function decodeMapCached(tiles, width) {
+    const key = typeof tiles === 'string' ? tiles : null;
+    if (key === null) return decodeMap(tiles, width);
+    let byWidth = mapCache.get(key);
+    if (!byWidth) {
+        if (mapCache.size > 2000) mapCache.clear();
+        byWidth = new Map();
+        mapCache.set(key, byWidth);
+    }
+    let decoded = byWidth.get(width);
+    if (!decoded) { decoded = decodeMap(tiles, width); byWidth.set(width, decoded); }
+    return decoded;
+}
+
 function processSingleMatch(matchData, mapsData, options) {
     const result = {};
     if (matchData.id) result.id = matchData.id;
@@ -289,7 +305,7 @@ function processSingleMatch(matchData, mapsData, options) {
 
     let decodedTiles = null;
     if (mapWidth > 0 && mapTiles) {
-        decodedTiles = decodeMap(mapTiles, mapWidth);
+        decodedTiles = decodeMapCached(mapTiles, mapWidth);
         mapHeight = decodedTiles.length;
     }
 

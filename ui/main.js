@@ -101,9 +101,16 @@ function preview(file, limit = 200) {
       const cols = rows.length ? Object.keys(rows[0]) : [];
       return { cols, rows: rows.slice(0, limit).map((r) => cols.map((c) => r[c])), total: rows.length };
     }
-    const lines = parseCsv(text);
+    // count the rows, but only parse the first ones (outputs can be hundreds of MB)
+    let total = -1, cut = -1;
+    for (let at = text.indexOf('\n'); at >= 0; at = text.indexOf('\n', at + 1)) {
+      total++;
+      if (total === limit) cut = at;
+    }
+    if (text.length && !text.endsWith('\n')) total++;
+    const lines = parseCsv(cut >= 0 ? text.slice(0, cut + 1) : text);
     const cols = lines.shift() || [];
-    return { cols, rows: lines.slice(0, limit), total: lines.length };
+    return { cols, rows: lines.slice(0, limit), total: Math.max(total, lines.length) };
   } catch (err) {
     return { error: err.message };
   }

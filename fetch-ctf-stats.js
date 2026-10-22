@@ -132,48 +132,39 @@ let delayMs = 2000;
 // [id, match] for the wanted ids only. Only the wanted matches are ever parsed, so a 125,000
 // match file does not have to fit in memory. Ids in a bulk file run in order, so reading stops
 // once it is past the last wanted id.
+// Every match in a bulk file starts with "<id>":{"server" - a byte sequence that can't occur inside
+// a JSON string (quotes there are escaped) - so the scanner jumps from one match start to the next
+// with Buffer.indexOf and only parses the matches it wants.
+const MATCH_START = Buffer.from('":{"server"');
 async function* scanBulk(file, wanted, maxId) {
-  const src = fs.createReadStream(file);
-  const stream = file.endsWith('.gz') ? src.pipe(zlib.createGunzip()) : src;
-  let depth = 0, inStr = false, esc = false;
-  let key = null, readingKey = false, keyChars = '';
-  let parts = null, from = 0;
+  const src = fs.createReadStream(file, { highWaterMark: 1 << 20 });
+  const stream = file.endsWith('.gz') ? src.pipe(zlib.createGunzip({ chunkSize: 1 << 20 })) : src;
+  let buf = Buffer.alloc(0);
+  let key = -1, open = false, body = 0;   // the current match: its id and where its { is in buf
+  const keeping = () => open && wanted.has(key);
   try {
     for await (const chunk of stream) {
-      if (parts) from = 0;
-      for (let i = 0; i < chunk.length; i++) {
-        const c = chunk[i];
-        if (inStr) {
-          if (esc) esc = false;
-          else if (c === 92) esc = true;                       // backslash
-          else if (c === 34) {                                 // closing quote
-            inStr = false;
-            if (readingKey) {
-              readingKey = false;
-              key = keyChars;
-              if (/^\d+$/.test(key) && Number(key) > maxId) return;
-            }
-          } else if (readingKey) keyChars += String.fromCharCode(c);
-          continue;
-        }
-        if (c === 34) {
-          inStr = true;
-          if (depth === 1) { readingKey = true; keyChars = ''; }
-        } else if (c === 123) {                                // {
-          depth++;
-          if (depth === 2 && wanted.has(Number(key))) { parts = []; from = i; }
-        } else if (c === 125) {                                // }
-          depth--;
-          if (depth === 1 && parts) {
-            parts.push(chunk.subarray(from, i + 1));
-            const match = JSON.parse(Buffer.concat(parts).toString('utf8'));
-            parts = null;
-            yield [Number(key), match];
-          }
-        }
+      buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
+      let at = keeping() ? body + 1 : 0;
+      for (;;) {
+        const m = buf.indexOf(MATCH_START, at);
+        if (m < 0) break;
+        let k = m;
+        while (k > 0 && buf[k - 1] >= 48 && buf[k - 1] <= 57) k--;
+        at = m + 1;
+        if (k === m || buf[k - 1] !== 34) continue;
+        // the current match ends just before the comma ahead of this key
+        if (keeping()) yield [key, JSON.parse(buf.toString('utf8', body, k - 2))];
+        key = Number(buf.toString('latin1', k, m));
+        if (key > maxId) return;
+        open = true;
+        body = m + 2;
       }
-      if (parts) parts.push(chunk.subarray(from));
+      // keep the current match if it's wanted, otherwise just a tail a split match start could be in
+      if (keeping()) { buf = buf.subarray(body); body = 0; }
+      else buf = buf.subarray(Math.max(0, buf.length - 32));
     }
+    if (keeping()) yield [key, JSON.parse(buf.toString('utf8', body, buf.lastIndexOf(125)))];
   } finally {
     src.destroy();
     stream.destroy();
@@ -286,9 +277,13 @@ async function* fromSite(opt, ids) {
 // ---------------------------------------------------------------- stats for one match
 
 // where each flag stands, in pixels (tile 30 = red flag, 40 = blue flag in the decoded map)
+const standsCache = new WeakMap();
 function flagStands(tiles) {
+  if (!Array.isArray(tiles)) return {};
+  const cached = standsCache.get(tiles);
+  if (cached) return cached;
   const out = {};
-  if (!Array.isArray(tiles)) return out;
+  standsCache.set(tiles, out);
   tiles.forEach((row, y) => row.forEach((v, x) => {
     if (v === 30) out[1] = [(x + 0.5) * 40, (y + 0.5) * 40];
     if (v === 40) out[2] = [(x + 0.5) * 40, (y + 0.5) * 40];
@@ -414,15 +409,28 @@ function matchStats(id, raw, maps, allModes) {
     for (const r of returns) if (r.side === side && r.time <= c && (!last || r.time >= last.time)) last = r;
     if (last && c - last.time < KEY) ps[last.player].kr++;
   }
+  // holds that ended in a drop, and splats, by frame
+  const byFrame = (list, time) => {
+    const map = new Map();
+    for (const x of list) { const t = time(x); const l = map.get(t); if (l) l.push(x); else map.set(t, [x]); }
+    return map;
+  };
+  const dropsAt = byFrame(holds.filter(dropped), (h) => h.end);
+  const splatsAt = byFrame(splats, (sp) => sp.time);
+  // the first item within MATCH_TOL frames of t that passes ok (the earliest frame first, as before)
+  const near = (map, t, ok) => {
+    for (let d = -MATCH_TOL; d <= MATCH_TOL; d++) for (const x of map.get(t + d) || []) if (ok(x)) return x;
+    return null;
+  };
   for (const r of returns) {
     const s = ps[r.player], mine = r.side, theirs = 3 - mine;
-    const stopped = holds.find((h) => h.side !== mine && Math.abs(h.end - r.time) <= MATCH_TOL && dropped(h));
+    const stopped = near(dropsAt, r.time, (h) => h.side !== mine);
     if (stopped && stopped.end - stopped.start < QUICK) s.qr++;
     // the splat of the returned carrier: the one in the return's own frame if there is one
     let at = null;
-    for (const sp of splats) {
-      if (sp.side !== theirs || Math.abs(sp.time - r.time) > MATCH_TOL) continue;
-      if (!at || Math.abs(sp.time - r.time) < Math.abs(at.time - r.time)) at = sp;
+    for (let d = 0; d <= MATCH_TOL && !at; d++) {
+      at = (splatsAt.get(r.time - d) || []).find((sp) => sp.side === theirs)
+        || (d && (splatsAt.get(r.time + d) || []).find((sp) => sp.side === theirs)) || null;
     }
     if (at) {
       // the league measures from the splat point moved one tile right and one tile down
@@ -625,8 +633,25 @@ function gaspNish(rows) {
 function write(file, rows) {
   if (file.endsWith('.json')) { fs.writeFileSync(file, JSON.stringify(rows, null, 1)); return; }
   const cols = rows.length ? Object.keys(rows[0]) : [];
-  const cell = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  fs.writeFileSync(file, [cols.join(','), ...rows.map((r) => cols.map((c) => cell(r[c])).join(','))].join('\n') + '\n');
+  const cell = (v) => {
+    if (typeof v === 'number') return String(v);
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const fd = fs.openSync(file, 'w');
+  try {
+    let block = cols.join(',') + '\n';
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      let line = '';
+      for (let j = 0; j < cols.length; j++) line += (j ? ',' : '') + cell(r[cols[j]]);
+      block += line + '\n';
+      if (block.length > 1 << 20) { fs.writeSync(fd, block); block = ''; }
+    }
+    fs.writeSync(fd, block);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 async function main() {
