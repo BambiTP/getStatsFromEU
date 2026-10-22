@@ -66,7 +66,9 @@ have, or download one yourself in a browser:
 (replace FIRST_ID and LAST_ID with match ids; save it as a `.json` file; gzipped `.json.gz` works too).
 Bulk files can be very large: the app reads them a piece at a time, so any size works.
 
-The maps file (`maps.json`) is downloaded from tagpro.eu automatically the first time. Downloads are
+The maps file (`maps.json`) is downloaded from tagpro.eu automatically the first time, and again
+once it's more than a day old (new maps keep being added). If you chose your own maps file and some
+matches are on maps newer than it, the log says how many were left out: download it again. Downloads are
 kept in the `cache` folder so nothing is downloaded twice, except a range that reaches past
 tagpro.eu's newest match: that is downloaded again next time, to pick up the games played since.
 

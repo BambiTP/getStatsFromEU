@@ -52,6 +52,8 @@ function startRun(options, onEvent) {
   });
 
   let partialLine = '';
+  // row counts from the script's summary lines, so big output files don't have to be read through
+  const counted = {};
   child.stdout.on('data', (chunk) => onEvent('log', { text: chunk.toString() }));
   child.stderr.on('data', (chunk) => {
     const lines = (partialLine + chunk.toString()).split('\n');
@@ -61,7 +63,12 @@ function startRun(options, onEvent) {
       if (progress) {
         onEvent('progress', { seen: Number(progress[1]), total: Number(progress[2]), bytesRead: Number(progress[3] || 0), bytesTotal: Number(progress[4] || 0) });
       }
-      else onEvent('log', { text: line + '\n' });
+      else {
+        const rows = line.match(/^\d+ match\(es\), (\d+) player rows/), players = line.match(/^(\d+) players -> /);
+        if (rows) counted.perMatch = Number(rows[1]);
+        if (players) counted.combined = Number(players[1]);
+        onEvent('log', { text: line + '\n' });
+      }
     }
   });
   child.on('error', (error) => onEvent('log', { text: error.message + '\n' }));
@@ -70,8 +77,8 @@ function startRun(options, onEvent) {
     for (const file of tempFiles) fs.rm(file, { force: true }, () => {});
     const result = { exitCode, stopped: signal === 'SIGTERM', perMatchFile: options.perMatchFile, combinedFile: options.combinedFile };
     if (exitCode === 0) {
-      if (options.perMatchFile) result.perMatch = readPreview(options.perMatchFile);
-      if (options.combinedFile) result.combined = readPreview(options.combinedFile);
+      if (options.perMatchFile) result.perMatch = readPreview(options.perMatchFile, counted.perMatch);
+      if (options.combinedFile) result.combined = readPreview(options.combinedFile, counted.combined);
     }
     onEvent('done', result);
   });
@@ -82,10 +89,11 @@ function startRun(options, onEvent) {
 
 // the first rows of a results file, reading only its start (output files can be gigabytes):
 // { columns, rows, totalRows }. JSON files are written one row per line, so they're read the same way.
-function readPreview(file) {
+function readPreview(file, rowCount) {
   try {
     const lines = firstLines(file, PREVIEW_ROWS + 2);
-    const totalLines = countLines(file);
+    // rows = lines less the header (CSV) or the [ and ] lines (JSON)
+    const totalLines = rowCount !== undefined ? rowCount + (file.endsWith('.json') ? 2 : 1) : countLines(file);
     if (file.endsWith('.json')) {
       const records = lines.filter((line) => line.startsWith('{')).slice(0, PREVIEW_ROWS)
         .map((line) => JSON.parse(line.replace(/,$/, '')));

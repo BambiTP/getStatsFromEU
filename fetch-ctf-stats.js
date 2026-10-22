@@ -127,7 +127,9 @@ function parseArgs(argv) {
   if (!opt.matches && !opt.totals) die('--no-matches needs --totals, or there is nothing to write');
   if (!opt.bulk.length) opt.bulk.push(MIRROR);
   // an output file is emptied when the run starts: it mustn't be one of the inputs, or the other output
-  const same = (a, b) => path.resolve(a) === path.resolve(b);
+  // (Windows and macOS file names usually ignore case)
+  const key = (f) => (process.platform === 'linux' ? path.resolve(f) : path.resolve(f).toLowerCase());
+  const same = (a, b) => key(a) === key(b);
   const outputs = [opt.matches && opt.out, opt.totals].filter(Boolean);
   if (outputs.length === 2 && same(outputs[0], outputs[1])) die('--out and --totals are the same file; give them different names');
   for (const out of outputs) {
@@ -404,14 +406,21 @@ async function downloadBulk(ids, cache) {
 // the maps file to use: --maps, or tagpro.eu's downloaded once into the cache
 async function mapsFile(opt) {
   if (fs.existsSync(opt.maps)) return opt.maps;
-  console.error(`no maps file at ${opt.maps}; getting tagpro.eu's maps file once (kept in ${opt.cache})`);
   const file = path.join(opt.cache, 'maps.json');
-  if (!fs.existsSync(file)) {
+  // new maps keep being added, so a maps file downloaded more than a day ago is downloaded again
+  const have = fs.existsSync(file);
+  if (have && Date.now() - fs.statSync(file).mtimeMs < 24 * 3600 * 1000) return file;
+  console.error(`no maps file at ${opt.maps}; using tagpro.eu's (kept in ${opt.cache}, downloaded again after a day)`);
+  try {
     fs.mkdirSync(opt.cache, { recursive: true });
     console.error('downloading bulk maps from tagpro.eu ...');
     const res = await request('bulk=maps');
     if (!res.ok) throw new Error(`maps download failed: HTTP ${res.status}`);
-    fs.writeFileSync(file, await res.text());
+    fs.writeFileSync(file + '.part', await res.text());
+    fs.renameSync(file + '.part', file);
+  } catch (e) {
+    if (!have) throw e;
+    console.error(`${e.message}; using the older maps file`);
   }
   return file;
 }
@@ -928,7 +937,9 @@ function processMatch(id, text, maps, allModes) {
     const raw = JSON.parse(text);
     if (!raw || !raw.players) return { rows: null };
     const map = raw.map || (maps && maps[raw.mapId]);
-    if (!allModes && map && OTHER_MODES.has(map.type)) return { rows: null };
+    // a map newer than the maps file: without it there's no telling CTF from other modes
+    if (!(map && map.tiles)) return { missingMap: raw.mapId };
+    if (!allModes && OTHER_MODES.has(map.type)) return { rows: null };
     return { rows: matchStats(id, raw, maps, allModes) };
   } catch (e) {
     return { error: e.message };
@@ -943,6 +954,7 @@ function makeMatchWorker({ maps, allModes, aliases, json, totals, filter }) {
   return (seq, id, text) => {
     const result = processMatch(id, text, maps, allModes);
     if (result.error) return { error: result.error };
+    if (result.missingMap !== undefined) return { missingMap: result.missingMap };
     if (!result.rows || !result.rows.length) return { skipped: true };
     let renamed = 0, lines = '', kept = 0;
     for (const r of result.rows) {
@@ -1091,6 +1103,8 @@ async function main() {
   const writer = opt.matches ? makeWriter(opt.out) : null;
   const combined = opt.totals ? makeTotals() : null;
   let done = 0, skipped = 0, failed = 0, rowCount = 0, renamed = 0, filteredOut = 0;
+  const missingMaps = new Set();
+  let noMap = 0;
   // a filter on the mode means every mode has to be worked out, so the filter can choose
   const allModes = opt.allModes || !!(opt.filter && opt.filter.flat().some((c) => c.column === 'mode'));
   if (opt.filter) console.error(`filter: ${opt.filter.map((g) => g.map((c) => `${c.column} ${c.op} ${c.value}`).join(' and ')).join(' / or / ')}`);
@@ -1110,6 +1124,7 @@ async function main() {
     if (result.fatal) die(result.fatal);
     if (result.error) { failed++; console.error(`  ${id}: could not read (${result.error})`); return; }
     if (result.skipped) { skipped++; return; }
+    if (result.missingMap !== undefined) { noMap++; missingMaps.add(result.missingMap); return; }
     if (result.filteredOut) { filteredOut++; return; }
     done++;
     rowCount += result.rows;
@@ -1142,6 +1157,10 @@ async function main() {
   console.error(`${done} match(es), ${rowCount} player rows${opt.matches ? ` -> ${opt.out}` : ''}` +
     (skipped ? `; ${skipped} non-CTF skipped` : '') + (filteredOut ? `; ${filteredOut} with no rows passing the filter` : '') +
     (failed ? `; ${failed} unreadable` : ''));
+  if (noMap) {
+    console.error(`${noMap} match(es) left out: their map (${[...missingMaps].slice(0, 10).join(', ')}${missingMaps.size > 10 ? ', ...' : ''}) ` +
+      `isn't in the maps file, which is probably older than them. Download the maps file again (${mapsPath}).`);
+  }
   if (combined) {
     const t = combined.finish();
     write(opt.totals, t);
