@@ -1,0 +1,13 @@
+{
+  "name": "tagpro-ctf-stats-ui",
+  "version": "1.0.0",
+  "description": "Desktop window for fetch-ctf-stats.js: paste match ids, pick files, run, preview",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "33.4.11"
+  }
+}

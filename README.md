@@ -37,3 +37,15 @@ node fetch-ctf-stats.js bulk 3934654-3934661,3934700,3935000-3935010 --totals to
 GASP and NISH in the totals are worked out against the players in that output only (a reconstruction,
 not a league's published number). Timeline thresholds (fitted to the TagPro League's own numbers) are at the top
 of the script.
+
+## Desktop window
+
+`ui/` is an Electron app around the script: paste match ids (ranges, lists, links), choose bulk or
+site mode, pick the bulk file or folder, maps file and output files, then Run. It shows the log
+live, can be stopped, and previews the results when it's done. Settings are remembered.
+
+```
+cd ui
+npm install
+npm start
+```

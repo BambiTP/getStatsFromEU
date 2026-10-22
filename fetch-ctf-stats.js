@@ -23,7 +23,7 @@
 //   --cache DIR       where downloads are kept and reused               default ./cache
 //   --delay MS        wait between tagpro.eu requests                    default 2000
 //
-// Thresholds for the timeline stats are NALTP's (naltp/derived_stats.py); change them below.
+// Timeline stats follow the TagPro League's own rules (STAT_DEFINITIONS.md section 4); thresholds below.
 
 const fs = require('fs');
 const path = require('path');

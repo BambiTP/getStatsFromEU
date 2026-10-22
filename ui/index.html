@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'">
+  <title>TagPro CTF Stats</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>TagPro CTF Stats</h1>
+    <p class="sub">tagpro.eu matches → per-player CTF stats, with the TagPro League's own stat rules</p>
+  </header>
+
+  <main>
+    <section class="card ids">
+      <div class="card-head">
+        <h2>Matches</h2>
+        <span id="idCount" class="pill">0 matches</span>
+      </div>
+      <textarea id="ids" spellcheck="false"
+        placeholder="Paste match ids, ranges or tagpro.eu links, in any mix:&#10;3934654-3934661&#10;3934700, 3934705&#10;https://tagpro.eu/?match=4307332"></textarea>
+      <div class="row small">
+        <button id="loadIds" class="ghost">Load from file…</button>
+        <button id="clearIds" class="ghost">Clear</button>
+      </div>
+    </section>
+
+    <section class="card settings">
+      <h2>Source</h2>
+      <div class="seg" role="radiogroup">
+        <label><input type="radio" name="mode" value="bulk" checked><span>Bulk files</span></label>
+        <label><input type="radio" name="mode" value="site"><span>tagpro.eu, one at a time</span></label>
+      </div>
+      <p id="modeHelp" class="help"></p>
+
+      <div class="bulk-only">
+        <label class="field">Bulk file or folder
+          <div class="pick">
+            <input id="bulk" type="text" spellcheck="false">
+            <button data-pick="bulk" data-kind="file">File…</button>
+            <button data-pick="bulk" data-kind="folder">Folder…</button>
+          </div>
+        </label>
+        <label class="field">Maps file
+          <div class="pick">
+            <input id="maps" type="text" spellcheck="false">
+            <button data-pick="maps" data-kind="file">Choose…</button>
+          </div>
+        </label>
+        <label class="check"><input id="download" type="checkbox"> Download the bulk range from tagpro.eu first</label>
+      </div>
+
+      <label class="field delay-field">Wait between tagpro.eu requests (ms)
+        <input id="delay" type="number" min="1000" step="500" value="2000">
+      </label>
+
+      <h2>Output</h2>
+      <label class="field">Stats file (one row per player per match)
+        <div class="pick">
+          <input id="out" type="text" spellcheck="false">
+          <button data-pick="out" data-kind="save">Save as…</button>
+        </div>
+      </label>
+      <label class="field">Totals file (one row per player, optional)
+        <div class="pick">
+          <input id="totals" type="text" spellcheck="false" placeholder="leave empty to skip">
+          <button data-pick="totals" data-kind="save">Save as…</button>
+        </div>
+      </label>
+      <label class="check"><input id="allModes" type="checkbox"> Keep non-CTF matches too</label>
+
+      <div class="actions">
+        <button id="run" class="primary">Run</button>
+        <button id="stop" class="danger" disabled>Stop</button>
+        <span id="status" class="status"></span>
+      </div>
+    </section>
+
+    <section class="card results">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="log">Log</button>
+        <button class="tab" data-tab="stats" disabled>Stats</button>
+        <button class="tab" data-tab="totalsTab" disabled>Totals</button>
+        <span class="spacer"></span>
+        <button id="openOut" class="ghost" disabled>Open file</button>
+        <button id="showOut" class="ghost" disabled>Show in folder</button>
+      </div>
+      <pre id="log" class="pane active"></pre>
+      <div id="stats" class="pane table-wrap"></div>
+      <div id="totalsTab" class="pane table-wrap"></div>
+    </section>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
