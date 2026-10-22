@@ -91,7 +91,7 @@ const MIRROR = path.join(os.homedir(), 'tagpro.eu');
 
 function parseArgs(argv) {
   const opt = { mode: argv[0], specs: [], out: 'ctf_stats.csv', totals: null, allModes: false, aliases: null, matches: true,
-    maps: path.join(MIRROR, 'maps.json'), bulk: [], download: false, cache: 'cache', delay: 2000,
+    maps: path.join(MIRROR, 'maps.json'), bulk: [], idsFiles: [], download: false, cache: 'cache', delay: 2000,
     // past about 4 threads the reading and writing thread is the limit, and each thread holds the maps
     threads: Math.max(1, Math.min(4, (os.availableParallelism ? os.availableParallelism() : os.cpus().length) - 1)) };
   for (let i = 1; i < argv.length; i++) {
@@ -101,13 +101,14 @@ function parseArgs(argv) {
       const file = next();
       if (!fs.existsSync(file)) die(`no ids file at ${file}`);
       opt.specs.push(fs.readFileSync(file, 'utf8'));
+      opt.idsFiles.push(file);
     }
     else if (a === '--out') opt.out = next();
     else if (a === '--totals') opt.totals = next();
     else if (a === '--no-matches') opt.matches = false;
     else if (a === '--all') opt.all = true;
     else if (a === '--aliases') opt.aliases = next();
-    else if (a === '--filter') opt.filter = loadFilter(next());
+    else if (a === '--filter') { opt.filterFile = next(); opt.filter = loadFilter(opt.filterFile); }
     else if (a === '--all-modes') opt.allModes = true;
     else if (a === '--maps') opt.maps = next();
     else if (a === '--bulk') opt.bulk.push(next());
@@ -125,11 +126,21 @@ function parseArgs(argv) {
   if (!Number.isFinite(opt.delay) || opt.delay < 2000) die('--delay must be a number of milliseconds, at least 2000');
   if (!opt.matches && !opt.totals) die('--no-matches needs --totals, or there is nothing to write');
   if (!opt.bulk.length) opt.bulk.push(MIRROR);
+  // an output file is emptied when the run starts: it mustn't be one of the inputs, or the other output
+  const same = (a, b) => path.resolve(a) === path.resolve(b);
+  const outputs = [opt.matches && opt.out, opt.totals].filter(Boolean);
+  if (outputs.length === 2 && same(outputs[0], outputs[1])) die('--out and --totals are the same file; give them different names');
+  for (const out of outputs) {
+    for (const input of [...opt.bulk, opt.maps, ...opt.idsFiles, opt.aliases, opt.filterFile].filter(Boolean)) {
+      if (same(out, input)) die(`${out} is an input file too; writing the results there would overwrite it`);
+    }
+  }
   return opt;
 }
 
 // players with several names -> Map(lower-cased name -> main name)
 function loadAliases(file) {
+  if (!fs.existsSync(file)) die(`no aliases file at ${file}`);
   const text = fs.readFileSync(file, 'utf8');
   const groups = [];
   const t = text.trim();
@@ -171,6 +182,7 @@ const FILTER_OPS = ['has all', 'has any', 'has none', 'one of', '!contains', 'co
 // a filter file -> [[{ column, op, value }, ...], ...]: groups of conditions that must all be true;
 // a row passes if any group does. Text (one condition per line, "or" between groups) or the app's JSON.
 function loadFilter(file) {
+  if (!fs.existsSync(file)) die(`no filter file at ${file}`);
   const text = fs.readFileSync(file, 'utf8').trim();
   let groups;
   if (text.startsWith('[')) {
@@ -286,6 +298,7 @@ async function* scanBulk(file, wanted, maxId) {
   let buf = Buffer.alloc(0);
   let key = -1, open = false, body = 0;   // the current match: its id and where its { is in buf
   const keeping = () => open && (wanted === null || wanted.has(key));   // wanted null: every match
+  let found = 0;
   try {
     for await (const chunk of stream) {
       buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
@@ -300,6 +313,7 @@ async function* scanBulk(file, wanted, maxId) {
         // the current match ends just before the comma ahead of this key
         if (keeping()) yield [key, buf.toString('utf8', body, k - 2)];
         key = Number(buf.toString('latin1', k, m));
+        found++;
         if (key > maxId) return;
         open = true;
         body = m + 2;
@@ -309,6 +323,10 @@ async function* scanBulk(file, wanted, maxId) {
       else buf = buf.subarray(Math.max(0, buf.length - 32));
     }
     if (keeping()) yield [key, buf.toString('utf8', body, buf.lastIndexOf(125))];
+    if (!found) console.error(`  no matches in ${file}`);
+  } catch (e) {
+    if (e.code && e.code.startsWith('Z_')) die(`${file} can't be unzipped (${e.message}): damaged, or not really a .gz file`);
+    throw e;
   } finally {
     src.destroy();
     stream.destroy();
@@ -1010,7 +1028,7 @@ function makePool(threads, options) {
 const csvCell = (v) => {
   if (typeof v === 'number') return String(v);
   const s = String(v ?? '');
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 function csvLine(r, cols) {
   let line = '';

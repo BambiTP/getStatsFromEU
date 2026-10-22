@@ -470,6 +470,10 @@ function problemWith(options) {
   if (!byId('write-per-match-checkbox').checked && !byId('write-combined-checkbox').checked) return 'Tick at least one output.';
   if (byId('write-per-match-checkbox').checked && !options.perMatchFile) return 'Choose where to save the per-match stats.';
   if (byId('write-combined-checkbox').checked && !options.combinedFile) return 'Choose where to save the combined stats.';
+  if (options.perMatchFile && options.perMatchFile === options.combinedFile) return 'The per-match and combined stats need different files.';
+  if ([options.perMatchFile, options.combinedFile].some((file) => file && (options.bulkFiles.includes(file) || file === options.mapsFile))) {
+    return 'An output file is one of the input files; choose another name so it isn\'t overwritten.';
+  }
   return '';
 }
 
