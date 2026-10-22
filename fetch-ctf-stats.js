@@ -53,6 +53,15 @@ const RIB_RADIUS = 5 * 40;        // return in base: less than 5 tiles from your
 const SAVE_RADIUS = 2 * 40;       // save: less than 2 tiles from the enemy flag...
 const SAVE_LAG = FPS / 2;         // ...with no teammate holding (a hold begun this recently doesn't count)
 const MATCH_TOL = 2;              // frames allowed between a return and the splat or drop it caused
+// TagPro Reference (tagpro-reference.com glossary)
+const OUT_HOLD = 6 * FPS;         // out: a cap, a hold of at least this...
+const OUT_HOME_HOLD = 4 * FPS;    // ...or at least this that ends nearer your own flag than the enemy's
+const PROD_GAP = 2 * FPS;         // productive grab: or a teammate grabs within this of the drop and gets out
+const PREVENT_LOOKBACK = FPS;     // defenders "on" a grab: preventing within this before it
+const REF_KEY = 2 * FPS;          // reference key return: within this before a teammate's cap
+const REF_SAVE_RADIUS = 6 * 40;   // reference save: within 6 tiles of the enemy flag, no teammate holding
+const BLOWOUT = [1, 1, 1, 1, 0.8, 0.6];   // weight of a cap that makes the lead this big (0.4 from 6 on)
+const blowout = (lead) => BLOWOUT[lead] ?? 0.4;
 
 // GASP (TagPro League) weights; NISH uses the same ones with the totals made per minute
 const GASP_O = [['cpm', 2], ['score_pct', 2], ['captures', 5], ['hold', 4]];
@@ -350,9 +359,32 @@ function isCtf(m) {
   return !!(s[1] && s[2]);
 }
 
+// TagPro Reference's columns: like the site, they only count regulation time
+const REFERENCE_COLUMNS = ['outs', 'productive_grabs', 'free_grabs', 'free_caps', 'defenders_on_grabs', 'grabs_faced',
+  'outs_against', 'team_prevent', 'nt_pops', 'ref_key_returns', 'ref_saves', 'bapm'];
+
 function matchStats(id, raw, maps, allModes) {
   const m = decoder.processMatch(raw, maps, { gameinfo: true, map: true, players: true, team: true, splats: true });
   if (!allModes && !isCtf(m)) return null;
+  const rows = timelineStats(id, m);
+  const limit = (m.timeLimit || 0) * 60 * FPS;
+  if (limit && m.duration > limit) {
+    const regulation = timelineStats(id, regulationOnly(m, limit));
+    rows.forEach((r, i) => {
+      for (const k of REFERENCE_COLUMNS) r[k] = regulation[i][k];
+      Object.assign(r, rates(r));
+    });
+  }
+  return rows;
+}
+
+// the match cut off at the time limit (the score stays the final score)
+function regulationOnly(m, limit) {
+  const players = m.players.map((p) => ({ ...p, events: [...p.events.filter((e) => e.time < limit), { type: 'end', time: limit }] }));
+  return { ...m, duration: limit, players };
+}
+
+function timelineStats(id, m) {
   const duration = m.duration;
   const limit = (m.timeLimit || 0) * 60 * FPS;
   const ps = m.players.map((p, idx) => ({
@@ -361,10 +393,12 @@ function matchStats(id, raw, maps, allModes) {
     hold: 0, prevent: 0, button: 0, block: 0,
     pups: 0, jj: 0, rb: 0, tp: 0, ts: 0,
     lh: 0, flcds: 0, ho: 0, gho: 0, goh: 0, gor: 0, coh: 0, cor: 0, otcaps: 0, qr: 0, kr: 0, rib: 0, saves: 0,
+    outs: 0, prod: 0, free: 0, freeCaps: 0, apo: 0, faced: 0, oa: 0, apt: 0, ntPops: 0, refKr: 0, refSaves: 0,
+    bapm: 0,
     teamTime: { 1: 0, 2: 0 }, intervals: [],
   }));
 
-  const holds = [], returns = [], popsByTeam = { 1: [], 2: [] };
+  const holds = [], returns = [], popsByTeam = { 1: [], 2: [] }, prevents = [], tagEvents = [];
   m.players.forEach((p, idx) => {
     const s = ps[idx];
     let team = p.team || 0, since = team ? 0 : -1, hold = null;
@@ -390,8 +424,8 @@ function matchStats(id, raw, maps, allModes) {
         case 'flaglessCapture': s.captures++; break;
         case 'drop': s.drops++; s.pops++; endHold(t, 'drop'); popsByTeam[e.team]?.push({ time: t, player: idx }); break;
         case 'pop': s.pops++; endHold(t, 'pop'); popsByTeam[e.team]?.push({ time: t, player: idx }); break;
-        case 'return': s.returns++; s.tags++; returns.push({ time: t, player: idx, side: e.team }); break;
-        case 'tag': s.tags++; break;
+        case 'return': s.returns++; s.tags++; returns.push({ time: t, player: idx, side: e.team }); tagEvents.push({ time: t, side: e.team }); break;
+        case 'tag': s.tags++; tagEvents.push({ time: t, side: e.team }); break;
         case 'powerup':
           s.pups++;
           if (e.power === 1) s.jj++; else if (e.power === 2) s.rb++; else if (e.power === 4) s.tp++; else if (e.power === 8) s.ts++;
@@ -402,12 +436,17 @@ function matchStats(id, raw, maps, allModes) {
         case 'startBlock': open.block = t; break;
         case 'stopPrevent': case 'stopButton': case 'stopBlock': {
           const k = e.type.slice(4).toLowerCase();
-          if (open[k] >= 0) { s[k] += t - open[k]; open[k] = -1; }
+          if (open[k] >= 0) {
+            s[k] += t - open[k];
+            if (k === 'prevent') prevents.push({ player: idx, side: team, start: open[k], end: t });
+            open[k] = -1;
+          }
           break;
         }
       }
     }
     for (const k of Object.keys(open)) if (open[k] >= 0) s[k] += duration - open[k];
+    if (open.prevent >= 0) prevents.push({ player: idx, side: team, start: open.prevent, end: duration });
   });
 
   // each hold against the same side's hold before it (events in one frame are taken in player order,
@@ -489,7 +528,63 @@ function matchStats(id, raw, maps, allModes) {
       if (within(stands[mine], RIB_RADIUS)) s.rib++;
       const holding = holds.some((h) => h.side === mine && h.start <= r.time - SAVE_LAG && r.time <= h.end);
       if (!holding && within(stands[theirs], SAVE_RADIUS)) s.saves++;
+      if (!holds.some((h) => h.side === mine && h.start <= r.time && r.time <= h.end) && within(stands[theirs], REF_SAVE_RADIUS)) s.refSaves++;
     }
+    // reference key return: any return within REF_KEY before a teammate's cap
+    if (capsBySide[mine]?.some((c) => c >= r.time && c - r.time <= REF_KEY)) s.refKr++;
+  }
+
+  // TagPro Reference's offence and defence stats (STAT_DEFINITIONS.md section 5)
+  // the opponents of `side` who were preventing at some point between from and to
+  const preventers = (side, from, to) => new Set(prevents
+    .filter((p) => p.side === side && p.start <= to && p.end > from).map((p) => p.player));
+  // out: a cap, a hold of OUT_HOLD, or one of OUT_HOME_HOLD whose drop splat is nearer your own flag
+  const isOut = holds.map((h) => {
+    const span = h.end - h.start;
+    if (h.how === 'cap' || span >= OUT_HOLD) return true;
+    if (span < OUT_HOME_HOLD || !dropped(h)) return false;
+    const sp = near(splatsAt, h.end, (x) => x.side === h.side);
+    const own = stands[h.side], enemy = stands[3 - h.side];
+    if (!sp || !own || !enemy) return false;
+    const d2 = (p) => (sp.x + SPLAT_SHIFT - p[0]) ** 2 + (sp.y + SPLAT_SHIFT - p[1]) ** 2;
+    return d2(own) < d2(enemy);
+  });
+  const lastOf = {};
+  holds.forEach((h, i) => {
+    const s = ps[h.player], prev = lastOf[h.side], enemy = 3 - h.side;
+    lastOf[h.side] = h;
+    if (isOut[i]) s.outs++;
+    // productive: an out, or a teammate grabs within PROD_GAP of this drop and gets out
+    const next = holds.findIndex((n, j) => j > i && n.side === h.side);
+    if (isOut[i] || (next >= 0 && dropped(h) && holds[next].player !== h.player
+      && holds[next].start - h.end <= PROD_GAP && isOut[next])) s.prod++;
+    // free (a regrab): no defender prevented between the team's last hold ending and this grab
+    if (!preventers(enemy, prev ? prev.end : 0, h.start).size) { s.free++; if (h.how === 'cap') s.freeCaps++; }
+    // defenders on this grab: preventing within PREVENT_LOOKBACK before it
+    const on = preventers(enemy, h.start - PREVENT_LOOKBACK, h.start);
+    s.apo += on.size;
+    for (const d of on) { ps[d].faced++; if (isOut[i]) ps[d].oa++; }
+  });
+  // APT: over each player's prevent time, how many teammates (them included) were preventing too
+  for (const p of prevents) for (const q of prevents) {
+    if (q.side === p.side) ps[p.player].apt += Math.max(0, Math.min(p.end, q.end) - Math.max(p.start, q.start));
+  }
+  // non-tag pops: pops with no opposing tag in the same frame (give or take MATCH_TOL)
+  const unusedTags = tagEvents.slice().sort((a, b) => a.time - b.time);
+  for (const pop of [...popsByTeam[1].map((x) => ({ ...x, side: 1 })), ...popsByTeam[2].map((x) => ({ ...x, side: 2 }))]
+    .sort((a, b) => a.time - b.time)) {
+    const k = unusedTags.findIndex((t) => t.side === 3 - pop.side && Math.abs(t.time - pop.time) <= MATCH_TOL);
+    if (k >= 0) unusedTags.splice(k, 1); else ps[pop.player].ntPops++;
+  }
+  // blowout-weighted plus-minus: a cap counts by the bigger lead either side of it
+  const caps = [...capsBySide[1].map((t) => ({ t, side: 1 })), ...capsBySide[2].map((t) => ({ t, side: 2 }))].sort((a, b) => a.t - b.t);
+  let lead = 0;   // red caps minus blue caps
+  for (const c of caps) {
+    const after = lead + (c.side === 1 ? 1 : -1), weight = blowout(Math.max(Math.abs(lead), Math.abs(after)));
+    for (const s of ps) for (const iv of s.intervals) {
+      if (iv.start <= c.t && c.t <= iv.end) { s.bapm += iv.team === c.side ? weight : -weight; break; }
+    }
+    lead = after;
   }
 
   // the league's periods: regulation, then clutch time (the score wasn't tied at the limit and a flag
@@ -554,6 +649,10 @@ function matchStats(id, raw, maps, allModes) {
       quick_returns: s.qr, key_returns: s.kr, returns_in_base: s.rib, saves: s.saves,
       nr_tags: Math.max(0, s.tags - s.returns), nd_pops: Math.max(0, s.pops - s.drops),
       kept_flags: s.grabs - s.drops - s.captures, league_hold: leagueHold[i], hold_against: ha,
+      outs: s.outs, productive_grabs: s.prod, free_grabs: s.free, free_caps: s.freeCaps,
+      defenders_on_grabs: s.apo, grabs_faced: s.faced, outs_against: s.oa, team_prevent: round(s.apt / FPS),
+      nt_pops: s.ntPops, ref_key_returns: s.refKr, ref_saves: s.refSaves,
+      bapm: round(s.bapm),
       eu_score: s.euScore, eu_points: s.euPoints,
     };
   });
@@ -580,6 +679,10 @@ function rates(r) {
     cpm: pm('captures'), gpm: pm('grabs'), rpm: pm('returns'), tpm: pm('tags'), ppm: pm('pops'),
     dpm: pm('drops'), pupm: pm('pups'), hold_pm: pm('hold'), prevent_pm: pm('prevent'), nrtpm: pm('nr_tags'),
     hold_against_pm: pm('hold_against'), cd_pm: pm('cap_diff'),
+    out_pct: round(div(r.outs, r.grabs) * 100), prod_pct: round(div(r.productive_grabs, r.grabs) * 100),
+    free_pct: round(div(r.free_grabs, r.grabs) * 100), apo: round(div(r.defenders_on_grabs, r.grabs)),
+    out_pct_against: round(div(r.outs_against, r.grabs_faced) * 100),
+    prevent_per_out_against: round(div(r.prevent, r.outs_against)), apt: round(div(r.team_prevent, r.prevent)),
   };
 }
 
@@ -622,7 +725,9 @@ function scoreboard(rows, gameMinutes) {
 const SUMS = ['minutes', 'caps_for', 'caps_against', 'cap_diff', 'tags', 'pops', 'grabs', 'drops', 'captures',
   'returns', 'hold', 'prevent', 'button', 'block', 'pups', 'juke_juice', 'rolling_bomb', 'tagpro', 'top_speed',
   'pups_available', 'long_holds', 'flaccids', 'handoffs', 'good_handoffs', 'grabs_off_handoffs', 'grabs_off_regrabs', 'caps_off_handoffs', 'caps_off_regrabs',
-  'ot_caps', 'quick_returns', 'key_returns', 'returns_in_base', 'saves', 'nr_tags', 'nd_pops', 'kept_flags', 'league_hold', 'hold_against', 'eu_score', 'eu_points'];
+  'ot_caps', 'quick_returns', 'key_returns', 'returns_in_base', 'saves', 'nr_tags', 'nd_pops', 'kept_flags', 'league_hold', 'hold_against', 'eu_score', 'eu_points',
+  'outs', 'productive_grabs', 'free_grabs', 'free_caps', 'defenders_on_grabs', 'grabs_faced', 'outs_against', 'team_prevent',
+  'nt_pops', 'ref_key_returns', 'ref_saves', 'bapm'];
 
 // combined stats, added up one row at a time so memory stays small however many rows there are
 function makeTotals() {

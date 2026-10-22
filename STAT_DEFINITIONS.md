@@ -145,6 +145,54 @@ what its numbers show: it calls a handoff "a teammate grab within 2 s of a < 3 s
 TagproStats extras
 - Kept flags = grabs − drops − caps. Cap difference. Hold and prevent for and against. Win = 1, loss = 0, tie = 2.
 
+## 5. TagPro Reference stats
+
+From tagpro-reference.com's glossary (resources/glossary). Where it leaves something open, the choice
+made here is listed. (SCAR is left out: the site's season totals couldn't be reproduced closely enough.)
+
+**Regulation only.** Like the site, these columns count only regulation time: a game that went past
+the time limit is cut off there (the score used is still the final score). The site's season pages
+confirm it: cut at the limit, minutes, caps and powerups match it exactly for all 181
+player-seasons of MLTP S34, S35, S37, S38 and S39, returns for all but one, and hold and prevent are
+within a few seconds.
+
+"Prevent" is tagpro.eu's prevent time: each player's prevent start and stop times are in the match file.
+
+Offence
+- **Out** (`outs`): a grab that ends in a cap, is held at least 6 s, or is held at least 4 s and dropped
+  nearer your own flag than the enemy's (where it was dropped = the carrier's splat, moved as in section 4).
+  A 4–6 s hold still running when the game ends has no drop point, so it doesn't count.
+  **Out %** = outs ÷ grabs.
+- **Productive grab**: an out, or a drop that a teammate grabs again within 2 s, if that grab is an out.
+  **Prod %** = productive grabs ÷ grabs.
+- **Free grab** (a regrab): no opposing player prevented at any time between the end of the team's previous
+  hold and this grab. **Free %** = free grabs ÷ grabs. **Free caps**: captures from free grabs.
+- **APO**: the average number of opponents preventing on a player's grabs = opponents who were preventing
+  within 1 s before each grab (`defenders_on_grabs`), ÷ grabs.
+
+Defence
+- **Grabs faced**: opposing grabs where the player was preventing within 1 s before the grab.
+  **Outs against**: those that got out. **Out % against** = outs against ÷ grabs faced.
+- **P/OA** (`prevent_per_out_against`) = prevent seconds ÷ outs against.
+- **APT**: over the player's prevent time, the average number of teammates preventing at the same
+  time, the player included (1.0 = always alone). `team_prevent` is that count added up over every
+  second of the player's prevent.
+- **Reference key return** (`ref_key_returns`): a return less than or equal to 2 s before a teammate's cap.
+  Every such return counts, not only the last.
+- **Reference save** (`ref_saves`): a return whose splat (moved as in section 4) is less than 6 tiles from the
+  enemy flag, while no teammate is holding the flag.
+
+Misc
+- **NTPop** (`nt_pops`): a pop with no opposing tag in the same frame (give or take 2 frames): spikes,
+  gates, and the like.
+- NRTag, NDPop, OTCaps, Kept and HA are about the same as `nr_tags`, `nd_pops`, `ot_caps`, `kept_flags` and
+  `hold_against` (section 4).
+
+Impact
+- **BAPM**: caps for minus caps against while the player was on the field, each weighted by SCAR's
+  blowout weight: 1 for a cap that makes or undoes a lead of 1–3, 0.8 for a lead of 4, 0.6 for 5,
+  0.4 for 6 or more (a cap that cuts a lead from 5 to 4 is worth 0.6).
+
 ## Other sources' numbers (not used)
 
 - Long hold: NALTP 8 s, TagproStats 10 s, TagPro Reference over 10 s, RankedStatsCollector 20 s or more.
