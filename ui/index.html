@@ -8,31 +8,44 @@
 </head>
 <body>
   <h1>TagPro CTF Stats</h1>
+  <p class="hint">CTF stats for tagpro.eu matches, worked out the same way as the TagPro League.</p>
 
-  <fieldset id="bulk-file-section">
-    <legend>1. Bulk file</legend>
-    <label for="bulk-file-path">Bulk match file (.json or .json.gz from tagpro.eu)</label>
-    <div class="path-row">
-      <input id="bulk-file-path" type="text">
-      <button id="choose-bulk-file-button" type="button">Choose…</button>
+  <fieldset id="source-section">
+    <legend>1. Where the matches come from</legend>
+
+    <label><input type="radio" name="match-source" value="bulk" checked> Bulk (many matches in one file)</label>
+    <div id="bulk-options" class="indented">
+      <label><input type="radio" name="bulk-source" value="file" checked> From a bulk file on this computer</label>
+      <div id="bulk-file-options" class="indented">
+        <label for="bulk-file-path">Bulk file (.json or .json.gz from tagpro.eu)</label>
+        <div class="path-row">
+          <input id="bulk-file-path" type="text" placeholder="No file chosen">
+          <button id="choose-bulk-file-button" type="button">Choose…</button>
+        </div>
+        <label for="maps-file-path">Maps file (optional: downloaded from tagpro.eu if left empty)</label>
+        <div class="path-row">
+          <input id="maps-file-path" type="text" placeholder="Download automatically">
+          <button id="choose-maps-file-button" type="button">Choose…</button>
+        </div>
+      </div>
+      <label><input type="radio" name="bulk-source" value="download"> Download from tagpro.eu</label>
+      <p id="bulk-download-hint" class="hint indented">Downloads the matches in big pieces (fast) and keeps them in the app's "cache" folder for next time.</p>
     </div>
-    <label for="maps-file-path">Maps file (maps.json from tagpro.eu; fetched automatically if missing)</label>
-    <div class="path-row">
-      <input id="maps-file-path" type="text">
-      <button id="choose-maps-file-button" type="button">Choose…</button>
-    </div>
+
+    <label><input type="radio" name="match-source" value="individual"> Individual matches (downloaded from tagpro.eu one at a time)</label>
+    <p id="individual-hint" class="hint indented">One request every 2 seconds, so best for a few hundred matches at most. Downloaded matches are kept in the "cache" folder.</p>
   </fieldset>
 
   <fieldset id="match-selection-section">
     <legend>2. Which matches</legend>
-    <label><input type="radio" name="match-selection" value="all" checked> All matches in the bulk file</label>
-    <label><input type="radio" name="match-selection" value="range"> A range of match ids:</label>
+    <label id="all-matches-option"><input type="radio" name="match-selection" value="all" checked> All matches in the bulk file</label>
+    <label><input type="radio" name="match-selection" value="range"> A range of match ids</label>
     <div class="indented">
       from <input id="range-first-id" type="number" min="0"> to <input id="range-last-id" type="number" min="0">
     </div>
-    <label><input type="radio" name="match-selection" value="list"> A list of match ids (ids, ranges like 100-200, or tagpro.eu links):</label>
+    <label><input type="radio" name="match-selection" value="list"> A list of match ids (ids, ranges like 100-200, or tagpro.eu links)</label>
     <div class="indented">
-      <textarea id="match-id-list" rows="5"></textarea>
+      <textarea id="match-id-list" rows="4"></textarea>
     </div>
   </fieldset>
 
@@ -40,35 +53,35 @@
     <legend>3. Output</legend>
     <label for="output-format">Format</label>
     <select id="output-format">
-      <option value="csv">CSV</option>
+      <option value="csv">CSV (opens in Excel / Google Sheets)</option>
       <option value="json">JSON</option>
     </select>
     <label><input id="write-per-match-checkbox" type="checkbox" checked> Per-match stats (one row per player per match)</label>
     <div class="path-row indented">
-      <input id="per-match-file-path" type="text">
-      <button id="choose-per-match-file-button" type="button">Choose…</button>
+      <input id="per-match-file-path" type="text" placeholder="Choose where to save">
+      <button id="choose-per-match-file-button" type="button">Save as…</button>
     </div>
-    <label><input id="write-combined-checkbox" type="checkbox" checked> Combined stats (one row per player)</label>
+    <label><input id="write-combined-checkbox" type="checkbox" checked> Combined stats (one row per player, all matches added up)</label>
     <div class="path-row indented">
-      <input id="combined-file-path" type="text">
-      <button id="choose-combined-file-button" type="button">Choose…</button>
+      <input id="combined-file-path" type="text" placeholder="Choose where to save">
+      <button id="choose-combined-file-button" type="button">Save as…</button>
     </div>
   </fieldset>
 
   <fieldset id="names-section">
     <legend>4. Combine names (optional)</legend>
-    <p>For players who used more than one name: the main name is used in the stats, the alt names are added to it.</p>
+    <p class="hint">For players who used more than one name: the main name is used in the stats and the alt names are added to it.</p>
     <label><input id="combine-names-checkbox" type="checkbox" checked> Combine names when running</label>
     <table id="names-table">
       <thead><tr><th>Main name</th><th>Alt names (separated by commas)</th><th></th></tr></thead>
       <tbody id="names-table-body"></tbody>
     </table>
-    <button id="add-player-button" type="button">Add player</button>
+    <button id="add-player-button" type="button">+ Add player</button>
     <details>
       <summary>Import / export as text</summary>
-      <p>One player per line, main name first: <code>Main: alt, alt</code></p>
-      <textarea id="names-text" rows="6"></textarea>
-      <div>
+      <p class="hint">One player per line, main name first: <code>Main: alt, alt</code></p>
+      <textarea id="names-text" rows="5"></textarea>
+      <div class="button-row">
         <button id="export-names-button" type="button">Export list to text</button>
         <button id="copy-names-button" type="button">Copy text</button>
         <button id="import-names-button" type="button">Import text (adds to the list)</button>
@@ -76,39 +89,26 @@
     </details>
   </fieldset>
 
-  <p>
+  <div class="button-row">
     <button id="run-button" type="button">Run</button>
     <button id="stop-button" type="button" disabled>Stop</button>
     <span id="status-text"></span>
-  </p>
+  </div>
 
   <h2>Log</h2>
   <pre id="log-output"></pre>
 
   <h2>Results</h2>
-  <p>
+  <div class="button-row">
     <select id="results-choice">
       <option value="combined">Combined stats</option>
       <option value="perMatch">Per-match stats</option>
     </select>
     <button id="open-results-button" type="button" disabled>Open file</button>
     <span id="results-summary"></span>
-  </p>
+  </div>
   <div id="results-table-holder"></div>
 
-  <dialog id="file-picker-dialog">
-    <p id="file-picker-title"></p>
-    <p id="file-picker-folder"></p>
-    <ul id="file-picker-list"></ul>
-    <label for="file-picker-name">File name (or a full path)</label>
-    <input id="file-picker-name" type="text">
-    <p>
-      <button id="file-picker-ok-button" type="button">OK</button>
-      <button id="file-picker-cancel-button" type="button">Cancel</button>
-    </p>
-  </dialog>
-
-  <script src="web-api.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -1,17 +1,52 @@
 body {
-  font-family: sans-serif;
-  max-width: 900px;
+  font-family: system-ui, sans-serif;
+  color: #222;
+  background: #f6f7f9;
+  max-width: 920px;
   margin: 20px auto;
   padding: 0 16px;
 }
 
+h1 {
+  margin-bottom: 4px;
+}
+
 fieldset {
+  background: #fff;
+  border: 1px solid #ccd;
+  border-radius: 6px;
+  padding: 10px 16px 14px;
   margin-bottom: 16px;
+}
+
+legend {
+  font-weight: bold;
+  padding: 0 4px;
 }
 
 label {
   display: block;
   margin-top: 8px;
+}
+
+.hint {
+  color: #666;
+  font-size: 0.9em;
+  margin: 4px 0;
+}
+
+.indented {
+  margin-left: 24px;
+}
+
+input[type="text"],
+input[type="number"],
+textarea,
+select {
+  padding: 5px 7px;
+  border: 1px solid #bbc;
+  border-radius: 4px;
+  font: inherit;
 }
 
 input[type="text"],
@@ -20,30 +55,67 @@ textarea {
   box-sizing: border-box;
 }
 
-.path-row {
+.path-row,
+.button-row {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
 }
 
-.indented {
-  margin-left: 24px;
+button {
+  padding: 6px 14px;
+  border: 1px solid #99a;
+  border-radius: 4px;
+  background: #eef0f3;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button:hover {
+  background: #dfe3e8;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#run-button {
+  background: #2a6fdb;
+  border-color: #2a6fdb;
+  color: #fff;
+  font-weight: bold;
+  padding: 8px 28px;
+}
+
+#run-button:hover {
+  background: #1f5bb8;
 }
 
 table {
   border-collapse: collapse;
   margin: 8px 0;
+  background: #fff;
 }
 
 th,
 td {
-  border: 1px solid #999;
-  padding: 3px 6px;
+  border: 1px solid #ccd;
+  padding: 4px 8px;
   text-align: left;
   white-space: nowrap;
 }
 
+th {
+  background: #eef0f3;
+}
+
 pre {
-  background: #eee;
+  background: #fff;
+  border: 1px solid #ccd;
+  border-radius: 4px;
   padding: 8px;
   max-height: 250px;
   overflow: auto;
@@ -52,9 +124,4 @@ pre {
 #results-table-holder {
   overflow: auto;
   max-height: 500px;
-}
-
-#file-picker-list {
-  max-height: 300px;
-  overflow: auto;
 }

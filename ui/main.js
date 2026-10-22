@@ -1,4 +1,4 @@
-// Desktop app (Electron): opens the window and handles native file dialogs. The work is in core.js.
+// Desktop app (Electron): opens the window and shows the system's file dialogs. The work is in core.js.
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const path = require('path');
 const core = require('./core');
@@ -22,15 +22,15 @@ app.on('window-all-closed', () => {
   app.quit();
 });
 
-ipcMain.handle('default-paths', () => core.defaultPaths());
-
-// kind: 'open' for an existing file, 'save' for a file to write
-ipcMain.handle('choose-file', async (event, kind, title, currentPath) => {
+// kind: 'open' (an existing file) or 'save' (a file to write).
+// Only the path is passed around, so the size of the file doesn't matter here.
+ipcMain.handle('choose-file', async (event, kind, title, currentPath, extensions) => {
+  const filters = [{ name: extensions.join(' / ').toUpperCase(), extensions }, { name: 'All files', extensions: ['*'] }];
   if (kind === 'save') {
-    const result = await dialog.showSaveDialog(mainWindow, { title, defaultPath: currentPath || undefined });
+    const result = await dialog.showSaveDialog(mainWindow, { title, defaultPath: currentPath, filters });
     return result.canceled ? null : result.filePath;
   }
-  const result = await dialog.showOpenDialog(mainWindow, { title, defaultPath: currentPath || undefined, properties: ['openFile'] });
+  const result = await dialog.showOpenDialog(mainWindow, { title, defaultPath: currentPath || undefined, filters, properties: ['openFile'] });
   return result.canceled ? null : result.filePaths[0];
 });
 

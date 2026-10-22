@@ -615,27 +615,35 @@ const SUMS = ['minutes', 'caps_for', 'caps_against', 'cap_diff', 'tags', 'pops',
   'pups_available', 'long_holds', 'flaccids', 'handoffs', 'good_handoffs', 'grabs_off_handoffs', 'grabs_off_regrabs', 'caps_off_handoffs', 'caps_off_regrabs',
   'ot_caps', 'quick_returns', 'key_returns', 'returns_in_base', 'saves', 'nr_tags', 'nd_pops', 'kept_flags', 'league_hold', 'hold_against', 'eu_score', 'eu_points'];
 
-function totals(rows) {
-  const by = new Map();
-  for (const r of rows) {
-    const k = r.player.toLowerCase();
-    if (!by.has(k)) by.set(k, { player: r.player, names: new Set(), games: 0, wins: 0, losses: 0, ties: 0, ...Object.fromEntries(SUMS.map((s) => [s, 0])), _score: [] });
-    const t = by.get(k);
-    t.games++;
-    t.names.add(r.played_as ?? r.player);
-    if (r.result === 'W') t.wins++; else if (r.result === 'L') t.losses++; else if (r.result === 'T') t.ties++;
-    for (const s of SUMS) t[s] += r[s];
-    if (r.score !== '') t._score.push(r.score);
-  }
-  const out = [...by.values()].map((t) => {
-    for (const s of SUMS) t[s] = round(t[s]);
-    const avg = t._score.length ? round(t._score.reduce((a, b) => a + b, 0) / t._score.length, 1) : '';
-    delete t._score;
-    t.names = [...t.names].join(' / ');
-    return { ...t, win_pct: round(div(t.wins, t.wins + t.losses + t.ties) * 100), avg_score: avg, ...rates(t) };
-  });
-  gaspNish(out);
-  return out.sort((a, b) => b.minutes - a.minutes);
+// combined stats, added up one row at a time so memory stays small however many rows there are
+function makeTotals() {
+  const byPlayer = new Map();
+  return {
+    add(r) {
+      const k = r.player.toLowerCase();
+      let t = byPlayer.get(k);
+      if (!t) {
+        t = { player: r.player, names: new Set(), games: 0, wins: 0, losses: 0, ties: 0, ...Object.fromEntries(SUMS.map((s) => [s, 0])), scoreSum: 0, scoreCount: 0 };
+        byPlayer.set(k, t);
+      }
+      t.games++;
+      t.names.add(r.played_as ?? r.player);
+      if (r.result === 'W') t.wins++; else if (r.result === 'L') t.losses++; else if (r.result === 'T') t.ties++;
+      for (const s of SUMS) t[s] += r[s];
+      if (r.score !== '') { t.scoreSum += r.score; t.scoreCount++; }
+    },
+    finish() {
+      const out = [...byPlayer.values()].map((t) => {
+        for (const s of SUMS) t[s] = round(t[s]);
+        const avg = t.scoreCount ? round(t.scoreSum / t.scoreCount, 1) : '';
+        const { scoreSum, scoreCount, ...rest } = t;
+        rest.names = [...t.names].join(' / ');
+        return { ...rest, win_pct: round(div(t.wins, t.wins + t.losses + t.ties) * 100), avg_score: avg, ...rates(rest) };
+      });
+      gaspNish(out);
+      return out.sort((a, b) => b.minutes - a.minutes);
+    },
+  };
 }
 
 // reconstructions over the players in this output, not tagproleague.com's published numbers
@@ -679,28 +687,43 @@ function gaspNish(rows) {
 
 // ---------------------------------------------------------------- output
 
-function write(file, rows) {
-  if (file.endsWith('.json')) { fs.writeFileSync(file, JSON.stringify(rows, null, 1)); return; }
-  const cols = rows.length ? Object.keys(rows[0]) : [];
+// writes rows to a .csv or .json file as they come, so they never all have to be in memory.
+// JSON is an array with one row per line.
+function makeWriter(file) {
+  const json = file.endsWith('.json');
+  const fd = fs.openSync(file, 'w');
+  let cols = null, block = '', count = 0;
   const cell = (v) => {
     if (typeof v === 'number') return String(v);
     const s = String(v ?? '');
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const fd = fs.openSync(file, 'w');
-  try {
-    let block = cols.join(',') + '\n';
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      let line = '';
-      for (let j = 0; j < cols.length; j++) line += (j ? ',' : '') + cell(r[cols[j]]);
-      block += line + '\n';
-      if (block.length > 1 << 20) { fs.writeSync(fd, block); block = ''; }
-    }
-    fs.writeSync(fd, block);
-  } finally {
-    fs.closeSync(fd);
-  }
+  const flush = (force) => { if (block && (force || block.length > 1 << 20)) { fs.writeSync(fd, block); block = ''; } };
+  return {
+    add(r) {
+      if (json) block += (count ? ',\n' : '[\n') + JSON.stringify(r);
+      else {
+        if (!cols) { cols = Object.keys(r); block += cols.join(',') + '\n'; }
+        let line = '';
+        for (let j = 0; j < cols.length; j++) line += (j ? ',' : '') + cell(r[cols[j]]);
+        block += line + '\n';
+      }
+      count++;
+      flush(false);
+    },
+    close() {
+      if (json) block += count ? '\n]\n' : '[]\n';
+      flush(true);
+      fs.closeSync(fd);
+      return count;
+    },
+  };
+}
+
+function write(file, rows) {
+  const w = makeWriter(file);
+  for (const r of rows) w.add(r);
+  w.close();
 }
 
 async function main() {
@@ -711,10 +734,13 @@ async function main() {
   if (opt.all) console.error(`every match in ${opt.bulk}`);
   else console.error(`${ids.length} match id(s), ${ids[0]} to ${ids[ids.length - 1]}, from ${opt.mode === 'site' ? 'tagpro.eu one at a time' : 'bulk files'}`);
 
-  const rows = [];
-  let done = 0, skipped = 0, failed = 0;
+  const aliases = opt.aliases ? loadAliases(opt.aliases) : null;
+  if (aliases) console.error(`aliases: ${aliases.size} names for ${new Set(aliases.values()).size} players`);
+  const writer = opt.matches ? makeWriter(opt.out) : null;
+  const combined = opt.totals ? makeTotals() : null;
+  let done = 0, skipped = 0, failed = 0, rowCount = 0, renamed = 0;
   const source = opt.mode === 'site' ? fromSite(opt, ids) : fromBulk(opt, ids);
-  // CTF_PROGRESS=1 (set by the desktop app): a "@progress seen total" line at most every 200 ms
+  // CTF_PROGRESS=1 (set by the app): a "@progress seen total" line at most every 200 ms
   const progress = process.env.CTF_PROGRESS ? (() => {
     let seen = 0, last = 0;
     return (final) => {
@@ -725,33 +751,33 @@ async function main() {
   })() : () => {};
   for await (const [id, raw, maps] of source) {
     progress();
+    let got;
     try {
       const m = raw.map || !maps ? raw : { ...raw, map: maps[raw.mapId] };
       if (!opt.allModes && m.map && OTHER_MODES.has(m.map.type)) { skipped++; continue; }
-      const got = matchStats(id, raw, maps, opt.allModes);
+      got = matchStats(id, raw, maps, opt.allModes);
       if (!got) { skipped++; continue; }
-      rows.push(...got);
-      done++;
     } catch (e) {
       failed++;
       console.error(`  ${id}: could not read (${e.message})`);
+      continue;
     }
-  }
-  if (opt.aliases) {
-    const aliases = loadAliases(opt.aliases);
-    let changed = 0;
-    for (const r of rows) {
-      const main = aliases.get(r.player.toLowerCase());
-      if (main && main !== r.player) { r.player = main; changed++; }
+    done++;
+    for (const r of got) {
+      const main = aliases && aliases.get(r.player.toLowerCase());
+      if (main && main !== r.player) { r.player = main; renamed++; }
+      if (writer) writer.add(r);
+      if (combined) combined.add(r);
+      rowCount++;
     }
-    console.error(`aliases: ${aliases.size} names for ${new Set(aliases.values()).size} players; ${changed} rows renamed`);
   }
   progress(true);
-  if (opt.matches) write(opt.out, rows);
-  console.error(`${done} CTF match(es), ${rows.length} player rows${opt.matches ? ` -> ${opt.out}` : ''}` +
+  if (writer) writer.close();
+  if (aliases) console.error(`aliases: ${renamed} rows renamed`);
+  console.error(`${done} CTF match(es), ${rowCount} player rows${opt.matches ? ` -> ${opt.out}` : ''}` +
     (skipped ? `; ${skipped} non-CTF skipped` : '') + (failed ? `; ${failed} unreadable` : ''));
-  if (opt.totals) {
-    const t = totals(rows);
+  if (combined) {
+    const t = combined.finish();
     write(opt.totals, t);
     console.error(`${t.length} players -> ${opt.totals}`);
   }

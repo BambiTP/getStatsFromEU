@@ -1,5 +1,4 @@
-// Shared by the desktop app (main.js) and the browser version (server.js):
-// running fetch-ctf-stats.js on a bulk file and reading back the results.
+// Runs fetch-ctf-stats.js for the desktop app (main.js) and reads back the results.
 const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -9,18 +8,14 @@ const ROOT = path.join(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'fetch-ctf-stats.js');
 const PREVIEW_ROWS = 200;
 
-function defaultPaths() {
-  const mirror = path.join(os.homedir(), 'tagpro.eu');
-  return {
-    bulkFile: '',
-    mapsFile: path.join(mirror, 'maps.json'),
-    perMatchFile: path.join(ROOT, 'ctf_stats.csv'),
-    combinedFile: path.join(ROOT, 'ctf_totals.csv'),
-  };
-}
-
-// options: { bulkFile, mapsFile, selection: 'all' | 'range' | 'list', rangeFirst, rangeLast, idList,
-//            perMatchFile, combinedFile, aliases: [{ main, alts }] }
+// options: {
+//   source: 'bulk-file' | 'bulk-download' | 'individual',
+//   bulkFile, mapsFile,                           (bulk-file only; mapsFile may be empty)
+//   selection: 'all' | 'range' | 'list',         ('all' only with bulk-file)
+//   rangeFirst, rangeLast, idList,
+//   perMatchFile, combinedFile,                   (either may be empty, not both)
+//   aliases: [{ main, alts }]
+// }
 // onEvent(type, data) gets 'log' { text }, 'progress' { seen, total } and 'done' { exitCode, stopped, ... }
 function startRun(options, onEvent) {
   const tempFiles = [];
@@ -31,8 +26,13 @@ function startRun(options, onEvent) {
     return file;
   };
 
-  const args = [SCRIPT, 'bulk', '--bulk', options.bulkFile];
-  if (options.mapsFile) args.push('--maps', options.mapsFile);
+  const args = [SCRIPT];
+  if (options.source === 'individual') args.push('site');
+  else if (options.source === 'bulk-download') args.push('bulk', '--download');
+  else {
+    args.push('bulk', '--bulk', options.bulkFile);
+    if (options.mapsFile) args.push('--maps', options.mapsFile);
+  }
   if (options.selection === 'all') args.push('--all');
   else if (options.selection === 'range') args.push(`${options.rangeFirst}-${options.rangeLast}`);
   else args.push('--ids', tempFile('ids.txt', options.idList));
@@ -41,7 +41,7 @@ function startRun(options, onEvent) {
   if (options.combinedFile) args.push('--totals', options.combinedFile);
   if (options.aliases && options.aliases.length) args.push('--aliases', tempFile('aliases.json', JSON.stringify(options.aliases)));
 
-  // process.execPath is Node (server) or Electron (desktop); ELECTRON_RUN_AS_NODE makes Electron act as Node
+  // process.execPath is Electron; ELECTRON_RUN_AS_NODE makes it run the script as plain Node
   const child = spawn(process.execPath, args, {
     cwd: ROOT,
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', CTF_PROGRESS: '1' },
@@ -74,22 +74,47 @@ function startRun(options, onEvent) {
   return { child, command: 'node fetch-ctf-stats.js ' + shownArgs.join(' ') };
 }
 
-// the first rows of a CSV or JSON results file: { columns, rows, totalRows }
+// the first rows of a results file, reading only its start (output files can be gigabytes):
+// { columns, rows, totalRows }. JSON files are written one row per line, so they're read the same way.
 function readPreview(file) {
   try {
-    const text = fs.readFileSync(file, 'utf8');
+    const lines = firstLines(file, PREVIEW_ROWS + 2);
+    const totalLines = countLines(file);
     if (file.endsWith('.json')) {
-      const records = JSON.parse(text);
+      const records = lines.filter((line) => line.startsWith('{')).slice(0, PREVIEW_ROWS)
+        .map((line) => JSON.parse(line.replace(/,$/, '')));
       const columns = records.length ? Object.keys(records[0]) : [];
-      const rows = records.slice(0, PREVIEW_ROWS).map((record) => columns.map((column) => record[column]));
-      return { columns, rows, totalRows: records.length };
+      return { columns, rows: records.map((record) => columns.map((column) => record[column])), totalRows: Math.max(0, totalLines - 2) };
     }
-    const lines = text.split('\n').filter((line) => line !== '');
     const columns = splitCsvLine(lines[0] || '');
-    const rows = lines.slice(1, PREVIEW_ROWS + 1).map(splitCsvLine);
-    return { columns, rows, totalRows: Math.max(0, lines.length - 1) };
+    return { columns, rows: lines.slice(1, PREVIEW_ROWS + 1).map(splitCsvLine), totalRows: Math.max(0, totalLines - 1) };
   } catch (error) {
     return { error: error.message };
+  }
+}
+
+function firstLines(file, howMany) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buffer = Buffer.alloc(4 << 20);
+    const length = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    return buffer.toString('utf8', 0, length).split('\n').filter((line) => line !== '').slice(0, howMany);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function countLines(file) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buffer = Buffer.alloc(4 << 20);
+    let count = 0, length;
+    while ((length = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+      for (let at = buffer.indexOf(10); at >= 0 && at < length; at = buffer.indexOf(10, at + 1)) count++;
+    }
+    return count;
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
@@ -109,4 +134,4 @@ function splitCsvLine(line) {
   return cells;
 }
 
-module.exports = { defaultPaths, startRun };
+module.exports = { startRun };

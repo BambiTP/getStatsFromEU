@@ -1,5 +1,5 @@
 // The page: reads the form, starts runs, shows the log and results, and edits the names list.
-// window.backend comes from preload.js (desktop app) or web-api.js (browser version).
+// window.backend comes from preload.js (the desktop app).
 
 const byId = (id) => document.getElementById(id);
 const SETTINGS_KEY = 'ctf-stats-settings';
@@ -7,57 +7,77 @@ const NAMES_KEY = 'ctf-stats-names';
 
 let lastResult = null;
 
-// ---------------------------------------------------------------- saved settings
+// ---------------------------------------------------------------- the form
+
+const checkedValue = (name) => document.querySelector(`input[name="${name}"]:checked`).value;
+const checkRadio = (name, value) => { document.querySelector(`input[name="${name}"][value="${value}"]`).checked = true; };
+
+// 'bulk-file', 'bulk-download' or 'individual'
+function matchSource() {
+  if (checkedValue('match-source') === 'individual') return 'individual';
+  return checkedValue('bulk-source') === 'download' ? 'bulk-download' : 'bulk-file';
+}
+
+// show only the parts of the form that apply to the chosen source
+function updateForm() {
+  const source = matchSource();
+  byId('bulk-options').hidden = source === 'individual';
+  byId('bulk-file-options').hidden = source !== 'bulk-file';
+  byId('bulk-download-hint').hidden = source !== 'bulk-download';
+  byId('individual-hint').hidden = source !== 'individual';
+  // "all matches" only makes sense for a bulk file
+  byId('all-matches-option').hidden = source !== 'bulk-file';
+  if (source !== 'bulk-file' && checkedValue('match-selection') === 'all') checkRadio('match-selection', 'range');
+}
+
+// ---------------------------------------------------------------- saved settings (this computer only)
 
 const SAVED_INPUTS = ['bulk-file-path', 'maps-file-path', 'range-first-id', 'range-last-id', 'match-id-list',
   'output-format', 'per-match-file-path', 'combined-file-path'];
 const SAVED_CHECKBOXES = ['write-per-match-checkbox', 'write-combined-checkbox', 'combine-names-checkbox'];
+const SAVED_RADIOS = ['match-source', 'bulk-source', 'match-selection'];
 
 function readSaved(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; }
 }
 
 function saveSettings() {
-  const settings = { matchSelection: selectedMatchSelection() };
+  const settings = {};
   for (const id of SAVED_INPUTS) settings[id] = byId(id).value;
   for (const id of SAVED_CHECKBOXES) settings[id] = byId(id).checked;
+  for (const name of SAVED_RADIOS) settings[name] = checkedValue(name);
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 
-async function loadSettings() {
-  const defaults = await window.backend.defaultPaths();
+function loadSettings() {
   const settings = readSaved(SETTINGS_KEY, {});
-  byId('bulk-file-path').value = defaults.bulkFile;
-  byId('maps-file-path').value = defaults.mapsFile;
-  byId('per-match-file-path').value = defaults.perMatchFile;
-  byId('combined-file-path').value = defaults.combinedFile;
   for (const id of SAVED_INPUTS) if (settings[id] !== undefined) byId(id).value = settings[id];
   for (const id of SAVED_CHECKBOXES) if (settings[id] !== undefined) byId(id).checked = settings[id];
-  if (settings.matchSelection) document.querySelector(`input[name="match-selection"][value="${settings.matchSelection}"]`).checked = true;
+  for (const name of SAVED_RADIOS) if (settings[name]) checkRadio(name, settings[name]);
 }
-
-const selectedMatchSelection = () => document.querySelector('input[name="match-selection"]:checked').value;
 
 // ---------------------------------------------------------------- choosing files
 
-async function chooseFileInto(inputId, kind, title) {
-  const chosen = await window.backend.chooseFile(kind, title, byId(inputId).value);
+const outputEnding = () => byId('output-format').value;
+
+async function chooseFileInto(inputId, kind, title, extensions, suggestedName) {
+  const current = byId(inputId).value || suggestedName || '';
+  const chosen = await window.backend.chooseFile(kind, title, current, extensions);
   if (chosen) {
     byId(inputId).value = chosen;
     saveSettings();
   }
 }
 
-byId('choose-bulk-file-button').onclick = () => chooseFileInto('bulk-file-path', 'open', 'Choose a bulk match file');
-byId('choose-maps-file-button').onclick = () => chooseFileInto('maps-file-path', 'open', 'Choose the maps file');
-byId('choose-per-match-file-button').onclick = () => chooseFileInto('per-match-file-path', 'save', 'Save per-match stats as');
-byId('choose-combined-file-button').onclick = () => chooseFileInto('combined-file-path', 'save', 'Save combined stats as');
+byId('choose-bulk-file-button').onclick = () => chooseFileInto('bulk-file-path', 'open', 'Choose a bulk match file', ['json', 'gz']);
+byId('choose-maps-file-button').onclick = () => chooseFileInto('maps-file-path', 'open', 'Choose the maps file', ['json']);
+byId('choose-per-match-file-button').onclick = () => chooseFileInto('per-match-file-path', 'save', 'Save per-match stats as', [outputEnding()], 'ctf_stats.' + outputEnding());
+byId('choose-combined-file-button').onclick = () => chooseFileInto('combined-file-path', 'save', 'Save combined stats as', [outputEnding()], 'ctf_totals.' + outputEnding());
 
-// changing CSV/JSON changes both output file endings
+// changing CSV/JSON changes the ending of output files already chosen
 byId('output-format').onchange = () => {
-  const ending = '.' + byId('output-format').value;
   for (const id of ['per-match-file-path', 'combined-file-path']) {
-    byId(id).value = byId(id).value.replace(/\.(csv|json)$/i, '') + ending;
+    if (byId(id).value) byId(id).value = byId(id).value.replace(/\.(csv|json)$/i, '') + '.' + outputEnding();
   }
   saveSettings();
 };
@@ -70,6 +90,8 @@ function saveNames() {
   localStorage.setItem(NAMES_KEY, JSON.stringify(players));
 }
 
+const splitNames = (text) => text.split(',').map((name) => name.trim()).filter((name) => name !== '');
+
 function showNames() {
   const tableBody = byId('names-table-body');
   tableBody.textContent = '';
@@ -77,11 +99,13 @@ function showNames() {
     const mainInput = document.createElement('input');
     mainInput.type = 'text';
     mainInput.value = player.main;
+    mainInput.placeholder = 'Main name';
     mainInput.oninput = () => { player.main = mainInput.value; saveNames(); };
 
     const altsInput = document.createElement('input');
     altsInput.type = 'text';
     altsInput.value = player.alts.join(', ');
+    altsInput.placeholder = 'alt name, another alt';
     altsInput.oninput = () => { player.alts = splitNames(altsInput.value); saveNames(); };
 
     const removeButton = document.createElement('button');
@@ -94,9 +118,8 @@ function showNames() {
     row.insertCell().append(altsInput);
     row.insertCell().append(removeButton);
   });
+  byId('names-table').hidden = players.length === 0;
 }
-
-const splitNames = (text) => text.split(',').map((name) => name.trim()).filter((name) => name !== '');
 
 byId('add-player-button').onclick = () => {
   players.push({ main: '', alts: [] });
@@ -152,11 +175,22 @@ function addToLog(text) {
   log.scrollTop = log.scrollHeight;
 }
 
+function problemWith(options) {
+  if (options.source === 'bulk-file' && !options.bulkFile) return 'Choose a bulk file first.';
+  if (options.selection === 'range' && (options.rangeFirst === '' || options.rangeLast === '')) return 'Fill in both ends of the range.';
+  if (options.selection === 'list' && !options.idList.trim()) return 'Type or paste some match ids.';
+  if (!byId('write-per-match-checkbox').checked && !byId('write-combined-checkbox').checked) return 'Tick at least one output.';
+  if (byId('write-per-match-checkbox').checked && !options.perMatchFile) return 'Choose where to save the per-match stats.';
+  if (byId('write-combined-checkbox').checked && !options.combinedFile) return 'Choose where to save the combined stats.';
+  return '';
+}
+
 byId('run-button').onclick = async () => {
   const options = {
+    source: matchSource(),
     bulkFile: byId('bulk-file-path').value.trim(),
     mapsFile: byId('maps-file-path').value.trim(),
-    selection: selectedMatchSelection(),
+    selection: checkedValue('match-selection'),
     rangeFirst: byId('range-first-id').value,
     rangeLast: byId('range-last-id').value,
     idList: byId('match-id-list').value,
@@ -164,12 +198,7 @@ byId('run-button').onclick = async () => {
     combinedFile: byId('write-combined-checkbox').checked ? byId('combined-file-path').value.trim() : '',
     aliases: byId('combine-names-checkbox').checked ? players.filter((player) => player.main.trim() && player.alts.length) : [],
   };
-
-  let problem = '';
-  if (!options.bulkFile) problem = 'Choose a bulk file first.';
-  else if (options.selection === 'range' && (options.rangeFirst === '' || options.rangeLast === '')) problem = 'Fill in both ends of the range.';
-  else if (options.selection === 'list' && !options.idList.trim()) problem = 'Type or paste some match ids.';
-  else if (!options.perMatchFile && !options.combinedFile) problem = 'Tick at least one output.';
+  const problem = problemWith(options);
   if (problem) { byId('status-text').textContent = problem; return; }
 
   saveSettings();
@@ -188,12 +217,10 @@ window.backend.onRunEvent((type, data) => {
   else if (type === 'progress') {
     byId('status-text').textContent = data.total ? `Running… ${data.seen} of ${data.total} matches` : `Running… ${data.seen} matches read`;
   } else if (type === 'started') {
-    // browser version: the server started a run (from this page or another one)
     byId('log-output').textContent = '$ ' + data.command + '\n';
     setRunning(true);
     byId('status-text').textContent = 'Running…';
   } else if (type === 'state') {
-    // browser version: the page was opened during or after a run
     if (data.command) byId('log-output').textContent = '$ ' + data.command + '\n' + data.log;
     if (data.running) { setRunning(true); byId('status-text').textContent = 'Running…'; }
     else if (data.lastResult) showResult(data.lastResult);
@@ -254,6 +281,9 @@ byId('open-results-button').onclick = () => {
 
 for (const id of SAVED_INPUTS) byId(id).addEventListener('change', saveSettings);
 for (const id of SAVED_CHECKBOXES) byId(id).addEventListener('change', saveSettings);
-for (const radio of document.querySelectorAll('input[name="match-selection"]')) radio.addEventListener('change', saveSettings);
+for (const name of SAVED_RADIOS) {
+  for (const radio of document.querySelectorAll(`input[name="${name}"]`)) radio.addEventListener('change', () => { updateForm(); saveSettings(); });
+}
 loadSettings();
+updateForm();
 showNames();
