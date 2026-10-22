@@ -70,7 +70,18 @@ async function chooseFileInto(inputId, kind, title, extensions, suggestedName) {
   }
 }
 
-byId('choose-bulk-file-button').onclick = () => chooseFileInto('bulk-file-path', 'open', 'Choose a bulk match file', ['json', 'gz']);
+// the bulk files: one path per line
+const bulkFilePaths = () => byId('bulk-file-path').value.split('\n').map((line) => line.trim()).filter((line) => line !== '');
+
+// adds the chosen files to the list (the browser version's picker gives one path, the desktop app's a list)
+byId('choose-bulk-file-button').onclick = async () => {
+  const current = bulkFilePaths();
+  const chosen = await window.backend.chooseFile('open-many', 'Choose bulk match files', current[current.length - 1] || '', ['json', 'gz']);
+  const added = (Array.isArray(chosen) ? chosen : chosen ? [chosen] : []).filter((file) => !current.includes(file));
+  if (!added.length) return;
+  byId('bulk-file-path').value = [...current, ...added].join('\n');
+  saveSettings();
+};
 byId('choose-maps-file-button').onclick = () => chooseFileInto('maps-file-path', 'open', 'Choose the maps file', ['json']);
 
 // saves tagpro.eu's maps file wherever the user chooses, then uses it
@@ -453,7 +464,7 @@ function addToLog(text) {
 }
 
 function problemWith(options) {
-  if (options.source === 'bulk-file' && !options.bulkFile) return 'Choose a bulk file first.';
+  if (options.source === 'bulk-file' && !options.bulkFiles.length) return 'Choose a bulk file first.';
   if (options.selection === 'range' && (options.rangeFirst === '' || options.rangeLast === '')) return 'Fill in both ends of the range.';
   if (options.selection === 'list' && !options.idList.trim()) return 'Type or paste some match ids.';
   if (!byId('write-per-match-checkbox').checked && !byId('write-combined-checkbox').checked) return 'Tick at least one output.';
@@ -465,7 +476,7 @@ function problemWith(options) {
 byId('run-button').onclick = async () => {
   const options = {
     source: matchSource(),
-    bulkFile: byId('bulk-file-path').value.trim(),
+    bulkFiles: bulkFilePaths(),
     mapsFile: byId('maps-file-path').value.trim(),
     selection: checkedValue('match-selection'),
     rangeFirst: byId('range-first-id').value,

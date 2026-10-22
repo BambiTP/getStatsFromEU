@@ -22,7 +22,7 @@ app.on('window-all-closed', () => {
   app.quit();
 });
 
-// kind: 'open' (an existing file) or 'save' (a file to write).
+// kind: 'open' (an existing file), 'open-many' (one or more; gives a list) or 'save' (a file to write).
 // Only the path is passed around, so the size of the file doesn't matter here.
 ipcMain.handle('choose-file', async (event, kind, title, currentPath, extensions) => {
   const filters = [{ name: extensions.join(' / ').toUpperCase(), extensions }, { name: 'All files', extensions: ['*'] }];
@@ -30,8 +30,10 @@ ipcMain.handle('choose-file', async (event, kind, title, currentPath, extensions
     const result = await dialog.showSaveDialog(mainWindow, { title, defaultPath: currentPath, filters });
     return result.canceled ? null : result.filePath;
   }
-  const result = await dialog.showOpenDialog(mainWindow, { title, defaultPath: currentPath || undefined, filters, properties: ['openFile'] });
-  return result.canceled ? null : result.filePaths[0];
+  const many = kind === 'open-many';
+  const result = await dialog.showOpenDialog(mainWindow, { title, defaultPath: currentPath || undefined, filters, properties: many ? ['openFile', 'multiSelections'] : ['openFile'] });
+  if (result.canceled) return null;
+  return many ? result.filePaths : result.filePaths[0];
 });
 
 ipcMain.handle('open-file', (event, filePath) => shell.openPath(filePath));

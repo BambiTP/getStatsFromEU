@@ -17,11 +17,12 @@
     <div id="bulk-options" class="indented">
       <label><input type="radio" name="bulk-source" value="file" checked> From a bulk file on this computer</label>
       <div id="bulk-file-options" class="indented">
-        <label for="bulk-file-path">Bulk file (.json or .json.gz from tagpro.eu)</label>
+        <label for="bulk-file-path">Bulk files (.json or .json.gz from tagpro.eu), one per line</label>
         <div class="path-row">
-          <input id="bulk-file-path" type="text" placeholder="No file chosen">
-          <button id="choose-bulk-file-button" type="button">Choose…</button>
+          <textarea id="bulk-file-path" rows="2" placeholder="No file chosen"></textarea>
+          <button id="choose-bulk-file-button" type="button">Add files…</button>
         </div>
+        <p class="hint">A match that is in more than one of the files is only counted once.</p>
       </div>
       <label><input type="radio" name="bulk-source" value="download"> Download from tagpro.eu</label>
       <p id="bulk-download-hint" class="hint indented">Downloads the matches in big pieces (fast) and keeps them in the app's "cache" folder for next time.</p>

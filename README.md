@@ -84,7 +84,7 @@ Then every time (from the `ui` folder):
 
 ### Steps in the app
 
-1. **Where the matches come from**: Bulk, either *from a bulk file on this computer* (choose the file)
+1. **Where the matches come from**: Bulk, either *from a bulk file on this computer* ("Add files…": one or more; a match in several of them counts once)
    or *download from tagpro.eu*; or *individual matches* (one request every 2 seconds, so best for a
    few hundred matches at most). For bulk you can choose a maps file you already have, or click
    "Download…" to save tagpro.eu's maps file somewhere and reuse it.
@@ -117,7 +117,7 @@ Then every time (from the `ui` folder):
 
 | Option | What it does |
 |---|---|
-| `--bulk FILE` | the bulk file (or a folder of them) |
+| `--bulk FILE` | the bulk file (or a folder of them); give it several times for several files |
 | `--all` | every match in the bulk file |
 | `--ids FILE` | a text file of ids, ranges or links |
 | `--download` | download the bulk matches from tagpro.eu instead of using `--bulk` |

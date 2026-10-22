@@ -10,7 +10,7 @@ const PREVIEW_ROWS = 200;
 
 // options: {
 //   source: 'bulk-file' | 'bulk-download' | 'individual',
-//   bulkFile,                                    (bulk-file only)
+//   bulkFiles: [file, ...],                      (bulk-file only)
 //   mapsFile,                                    (both bulk sources; may be empty)
 //   selection: 'all' | 'range' | 'list',         ('all' only with bulk-file)
 //   rangeFirst, rangeLast, idList,
@@ -31,7 +31,10 @@ function startRun(options, onEvent) {
   const args = [SCRIPT];
   if (options.source === 'individual') args.push('site');
   else if (options.source === 'bulk-download') args.push('bulk', '--download');
-  else args.push('bulk', '--bulk', options.bulkFile);
+  else {
+    args.push('bulk');
+    for (const file of options.bulkFiles) args.push('--bulk', file);
+  }
   if (options.source !== 'individual' && options.mapsFile) args.push('--maps', options.mapsFile);
   if (options.selection === 'all') args.push('--all');
   else if (options.selection === 'range') args.push(`${options.rangeFirst}-${options.rangeLast}`);

@@ -23,7 +23,8 @@
 //   --all-modes       keep non-CTF matches (neutral flag, Marsball, ...) instead of skipping them
 //   --filter FILE     keep only the rows that pass these conditions (see "Filters" below)
 //   --maps FILE       tagpro.eu bulk maps file (bulk mode)               default ~/tagpro.eu/maps.json
-//   --bulk PATH       bulk file, or folder of bulk files (bulk mode)     default ~/tagpro.eu
+//   --bulk PATH       bulk file, or folder of bulk files (bulk mode;     default ~/tagpro.eu
+//                     give it more than once for several)
 //   --download        bulk mode: fetch the id range from tagpro.eu's bulk endpoint into --cache first
 //   --cache DIR       where downloads are kept and reused               default ./cache
 //   --delay MS        wait between tagpro.eu requests                    default 2000 (the minimum)
@@ -90,7 +91,7 @@ const MIRROR = path.join(os.homedir(), 'tagpro.eu');
 
 function parseArgs(argv) {
   const opt = { mode: argv[0], specs: [], out: 'ctf_stats.csv', totals: null, allModes: false, aliases: null, matches: true,
-    maps: path.join(MIRROR, 'maps.json'), bulk: MIRROR, download: false, cache: 'cache', delay: 2000,
+    maps: path.join(MIRROR, 'maps.json'), bulk: [], download: false, cache: 'cache', delay: 2000,
     // past about 4 threads the reading and writing thread is the limit, and each thread holds the maps
     threads: Math.max(1, Math.min(4, os.availableParallelism() - 1)) };
   for (let i = 1; i < argv.length; i++) {
@@ -105,7 +106,7 @@ function parseArgs(argv) {
     else if (a === '--filter') opt.filter = loadFilter(next());
     else if (a === '--all-modes') opt.allModes = true;
     else if (a === '--maps') opt.maps = next();
-    else if (a === '--bulk') opt.bulk = next();
+    else if (a === '--bulk') opt.bulk.push(next());
     else if (a === '--download') opt.download = true;
     else if (a === '--cache') opt.cache = next();
     else if (a === '--delay') opt.delay = Number(next());
@@ -119,6 +120,7 @@ function parseArgs(argv) {
   // tagpro.eu is someone else's free server: never ask faster than one request every 2 seconds
   if (!Number.isFinite(opt.delay) || opt.delay < 2000) die('--delay must be a number of milliseconds, at least 2000');
   if (!opt.matches && !opt.totals) die('--no-matches needs --totals, or there is nothing to write');
+  if (!opt.bulk.length) opt.bulk.push(MIRROR);
   return opt;
 }
 
@@ -306,9 +308,16 @@ async function* scanBulk(file, wanted, maxId) {
   }
 }
 
-// the bulk files that cover any of the ids, from a mirror's manifest.json or from file names
-// like matches_00000000_00124999.json.gz / bulk_4174512_4244514.json
-function bulkFiles(where, ids) {
+// the bulk files that cover any of the ids, for each of the --bulk paths (files are used as they are)
+function bulkFiles(wheres, ids) {
+  const files = [];
+  for (const where of wheres) for (const f of bulkFilesIn(where, ids)) if (!files.includes(f)) files.push(f);
+  return files;
+}
+
+// one --bulk path: a file, or a folder, read from a mirror's manifest.json or from file names like
+// matches_00000000_00124999.json.gz / bulk_4174512_4244514.json
+function bulkFilesIn(where, ids) {
   const covers = (f) => ids === null || ids.some((i) => f.first <= i && i <= f.last);
   if (!fs.existsSync(where)) die(`no bulk file or folder at ${where}`);
   if (fs.statSync(where).isFile()) return [where];
@@ -373,7 +382,7 @@ async function mapsFile(opt) {
 async function* fromBulk(opt, ids) {
   if (opt.all) {                                   // every match in the bulk file(s)
     const files = bulkFiles(opt.bulk, null);
-    if (!files.length) die(`no bulk files in ${opt.bulk}`);
+    if (!files.length) die(`no bulk files in ${opt.bulk.join(', ')}`);
     // a folder can hold files that overlap (a mirror's pieces and bigger copies): each match only once
     const seen = files.length > 1 ? new Set() : null;
     for (const file of files) {
@@ -386,7 +395,7 @@ async function* fromBulk(opt, ids) {
     return;
   }
   const files = opt.download ? await downloadBulk(ids, opt.cache) : bulkFiles(opt.bulk, ids);
-  if (!files.length) die(`no bulk file under ${opt.bulk} covers those ids (try --download)`);
+  if (!files.length) die(`no bulk file in ${opt.bulk.join(', ')} covers those ids (try --download)`);
   const want = new Set(ids), maxId = ids[ids.length - 1];
   for (const file of files) {
     if (!want.size) break;
@@ -1032,7 +1041,7 @@ async function main() {
   delayMs = opt.delay;
   const ids = parseIds(opt.specs);
   if (!ids.length && !opt.all) die('no match ids given (or --all for every match in the bulk file)');
-  if (opt.all) console.error(`every match in ${opt.bulk}`);
+  if (opt.all) console.error(`every match in ${opt.bulk.join(', ')}`);
   else console.error(`${ids.length} match id(s), ${ids[0]} to ${ids[ids.length - 1]}, from ${opt.mode === 'site' ? 'tagpro.eu one at a time' : 'bulk files'}`);
 
   const aliases = opt.aliases ? loadAliases(opt.aliases) : null;
