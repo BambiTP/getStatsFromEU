@@ -26,7 +26,7 @@
 //   --download        bulk mode: fetch the id range from tagpro.eu's bulk endpoint into --cache first
 //   --cache DIR       where downloads are kept and reused               default ./cache
 //   --delay MS        wait between tagpro.eu requests                    default 2000
-//   --threads N       bulk mode: work out matches on N threads           default CPU cores - 1
+//   --threads N       bulk mode: work out matches on N threads           default CPU cores - 1, at most 4
 //
 // Timeline stats follow the TagPro League's own rules (STAT_DEFINITIONS.md section 4); thresholds below.
 
@@ -78,7 +78,8 @@ const MIRROR = path.join(os.homedir(), 'tagpro.eu');
 function parseArgs(argv) {
   const opt = { mode: argv[0], specs: [], out: 'ctf_stats.csv', totals: null, allModes: false, aliases: null, matches: true,
     maps: path.join(MIRROR, 'maps.json'), bulk: MIRROR, download: false, cache: 'cache', delay: 2000,
-    threads: Math.max(1, os.availableParallelism() - 1) };
+    // past about 4 threads the reading and writing thread is the limit, and each thread holds the maps
+    threads: Math.max(1, Math.min(4, os.availableParallelism() - 1)) };
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
     const next = () => { if (i + 1 >= argv.length) die(`${a} needs a value`); return argv[++i]; };
