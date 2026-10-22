@@ -166,21 +166,29 @@ const LIST_COLUMNS = new Set(['teammates', 'opponents', 'in_game']);
 function loadFilter(file) {
   const text = fs.readFileSync(file, 'utf8').trim();
   let groups;
-  if (text.startsWith('[')) groups = JSON.parse(text);
+  if (text.startsWith('[')) {
+    try { groups = JSON.parse(text); } catch (e) { die(`filter: ${file} looks like JSON but can't be read (${e.message})`); }
+    if (!Array.isArray(groups) || !groups.every(Array.isArray)) die(`filter: ${file} should be [[{column, op, value}, ...], ...]`);
+  }
   else {
     groups = [[]];
     const opPattern = FILTER_OPS.map((o) => o.replace(/[<>=!]/g, (c) => '\\' + c)).join('|');
     for (const raw of text.split('\n')) {
-      const line = raw.replace(/#.*/, '').trim();
-      if (!line) continue;
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;   // a comment line (a # later on is part of the value)
       if (line.toLowerCase() === 'or') { groups.push([]); continue; }
       const m = line.match(new RegExp(`^(\\S+?)\\s*(${opPattern})\\s*(.*)$`, 'i'));
       if (!m) die(`filter: can't read "${line}" (use: column operator value)`);
       groups[groups.length - 1].push({ column: m[1], op: m[2].toLowerCase(), value: m[3].trim() });
     }
   }
-  groups = groups.map((g) => g.filter((c) => c && c.column)).filter((g) => g.length);
-  for (const c of groups.flat()) if (!FILTER_OPS.includes(c.op)) die(`filter: unknown operator "${c.op}"`);
+  for (const c of groups.flat()) {
+    if (!c || !c.column) continue;
+    if (!FILTER_OPS.includes(c.op)) die(`filter: unknown operator "${c.op}"`);
+    c.value = c.value === undefined || c.value === null ? '' : String(c.value).trim();
+  }
+  // a condition with no value is left out, as the app does
+  groups = groups.map((g) => g.filter((c) => c && c.column && c.value !== '')).filter((g) => g.length);
   return groups.length ? groups : null;
 }
 

@@ -101,6 +101,7 @@ let players = readSaved(NAMES_KEY, []);
 
 function saveNames() {
   localStorage.setItem(NAMES_KEY, JSON.stringify(players));
+  if (typeof showFilters === 'function' && byId('filter-groups').children.length) showFilters();   // Combine? buttons follow the list
 }
 
 const splitNames = (text) => text.split(',').map((name) => name.trim()).filter((name) => name !== '');
@@ -236,6 +237,75 @@ function saveFilters() {
 
 function newCondition() { return { column: 'player', op: '=', value: '' }; }
 
+// "Combine?": a name in a filter that is in the names list can be widened to all of that player's names
+const NAME_COLUMNS = new Set(['player', 'played_as', 'teammates', 'opponents', 'in_game']);
+const COMBINABLE_OPS = new Set(['=', '!=', 'one of', 'has any', 'has all', 'has none']);
+
+// the names list entry a name belongs to, as [main, ...alts], or null
+function namesOf(name) {
+  const lower = name.toLowerCase();
+  const player = players.find((p) => p.main.trim() && [p.main, ...p.alts].some((n) => n.toLowerCase() === lower));
+  return player ? [player.main.trim(), ...player.alts] : null;
+}
+
+// a player's key: their main name, lower case
+const groupKey = (names) => names[0].toLowerCase();
+
+// for each name in the condition, its whole names list entry (or just the name)
+function nameGroups(condition) {
+  const groups = [];
+  for (const name of splitNames(condition.value)) {
+    const group = namesOf(name) || [name];
+    if (!groups.some((g) => groupKey(g) === groupKey(group))) groups.push(group);
+  }
+  return groups;
+}
+
+// the players in the condition that have names not typed yet, and haven't been dismissed with ×
+function combinableGroups(condition) {
+  if (!NAME_COLUMNS.has(condition.column) || !COMBINABLE_OPS.has(condition.op)) return [];
+  const typed = splitNames(condition.value).map((n) => n.toLowerCase());
+  const dismissed = condition.dismissed || [];
+  return nameGroups(condition).filter((group) => !dismissed.includes(groupKey(group)) && group.some((n) => !typed.includes(n.toLowerCase())));
+}
+
+// a dismissed player comes back once their name has left the box (deleted, then typed again)
+function forgetDismissed(condition) {
+  if (!condition.dismissed) return;
+  const present = nameGroups(condition).map(groupKey);
+  condition.dismissed = condition.dismissed.filter((key) => present.includes(key));
+  if (!condition.dismissed.length) delete condition.dismissed;
+}
+
+// rewrites the condition (or splits it, for "include all of" and "is not") so every name covers the whole player
+function combineCondition(group, condition) {
+  const widen = combinableGroups(condition).map(groupKey);
+  // one entry per widened player with all their names; any other name typed stays as it is (e.g. dismissed with ×)
+  const groups = [];
+  for (const name of splitNames(condition.value)) {
+    const whole = namesOf(name) || [name];
+    const key = groupKey(whole);
+    const entry = groups.find((g) => g.key === key);
+    if (!widen.includes(key)) groups.push(Object.assign([name], { key }));
+    else if (!entry) groups.push(Object.assign(whole.slice(), { key }));
+  }
+  const everyName = groups.flat();
+  let replacement;
+  if (condition.op === 'has all') {
+    replacement = groups.map((g) => ({ column: condition.column, op: 'has any', value: g.join(', ') }));
+  } else if (condition.op === '!=') {
+    replacement = everyName.map((n) => ({ column: condition.column, op: '!=', value: n }));
+  } else if (condition.op === '=' || condition.op === 'one of') {
+    replacement = [{ column: condition.column, op: 'one of', value: everyName.join(', ') }];
+  } else {
+    replacement = [{ column: condition.column, op: condition.op, value: everyName.join(', ') }];
+  }
+  if (condition.dismissed) for (const r of replacement) r.dismissed = condition.dismissed.slice();
+  group.splice(group.indexOf(condition), 1, ...replacement);
+  saveFilters();
+  showFilters();
+}
+
 function conditionRow(group, condition) {
   const row = document.createElement('div');
   row.className = 'button-row';
@@ -264,9 +334,30 @@ function conditionRow(group, condition) {
   };
   fillOperators();
 
-  columnSelect.onchange = () => { condition.column = columnSelect.value; fillOperators(); saveFilters(); };
-  operatorSelect.onchange = () => { condition.op = operatorSelect.value; saveFilters(); };
-  valueInput.oninput = () => { condition.value = valueInput.value; saveFilters(); };
+  const combineButton = document.createElement('button');
+  combineButton.type = 'button';
+  combineButton.textContent = 'Combine?';
+  combineButton.title = 'Also match this player\'s other names from "Combine names"';
+  combineButton.onclick = () => combineCondition(group, condition);
+  const dismissButton = document.createElement('button');
+  dismissButton.type = 'button';
+  dismissButton.textContent = '×';
+  dismissButton.title = 'Don\'t combine (comes back if the name is typed again)';
+  dismissButton.onclick = () => {
+    condition.dismissed = [...(condition.dismissed || []), ...combinableGroups(condition).map(groupKey)];
+    updateCombineButton();
+    saveFilters();
+  };
+  const updateCombineButton = () => {
+    const show = combinableGroups(condition).length > 0;
+    combineButton.hidden = !show;
+    dismissButton.hidden = !show;
+  };
+  updateCombineButton();
+
+  columnSelect.onchange = () => { condition.column = columnSelect.value; fillOperators(); updateCombineButton(); saveFilters(); };
+  operatorSelect.onchange = () => { condition.op = operatorSelect.value; updateCombineButton(); saveFilters(); };
+  valueInput.oninput = () => { condition.value = valueInput.value; forgetDismissed(condition); updateCombineButton(); saveFilters(); };
 
   const removeButton = document.createElement('button');
   removeButton.type = 'button';
@@ -278,7 +369,7 @@ function conditionRow(group, condition) {
     showFilters();
   };
 
-  row.append(columnSelect, operatorSelect, valueInput, removeButton);
+  row.append(columnSelect, operatorSelect, valueInput, combineButton, dismissButton, removeButton);
   return row;
 }
 
@@ -329,7 +420,7 @@ byId('import-filters-button').onclick = () => {
   const groups = [[]];
   for (const raw of byId('filters-text').value.split('\n')) {
     const line = raw.trim();
-    if (!line) continue;
+    if (!line || line.startsWith('#')) continue;
     if (line.toLowerCase() === 'or') { groups.push([]); continue; }
     const column = line.split(/[\s<>=!]/)[0];
     const rest = line.slice(column.length).trim();
@@ -344,7 +435,9 @@ byId('import-filters-button').onclick = () => {
 };
 
 // the filters to send with a run: conditions with a value, boxes with a condition
-const filtersForRun = () => filterGroups.map((group) => group.filter((c) => c.value.trim() !== '')).filter((group) => group.length);
+const filtersForRun = () => filterGroups
+  .map((group) => group.filter((c) => c.value.trim() !== '').map(({ column, op, value }) => ({ column, op, value })))
+  .filter((group) => group.length);
 
 // ---------------------------------------------------------------- running
 

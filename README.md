@@ -95,6 +95,8 @@ Then every time (from the `ui` folder):
    to be true (and); "+ Or" adds another box, and a row is kept if any box is true. Conditions can use
    the match (mode CTF or neutral flag, group or public, time limit, players in the game, server, map,
    date, overtime, ...), the player (name, color, result, teammates, opponents, ...) or any stat.
+   Names match exactly; if a name is in your "Combine names" list, a **Combine?** button appears next to
+   it and adds that player's other names to the condition (× hides the button for that name).
    There is no "ranked" column in tagpro.eu's data; public games with an 8 minute time limit and no
    more than 8 players come close.
 3. **Output**: CSV or JSON; per-match stats and/or combined stats, and where to save them.
