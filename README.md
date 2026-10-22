@@ -128,7 +128,7 @@ Then every time (from the `ui` folder):
 | `--aliases FILE` | combine names: one player per line, `Main: alt, alt` or `alt, alt -> Main` |
 | `--all-modes` | keep non-CTF matches |
 | `--filter FILE` | keep only rows passing the conditions in FILE (below) |
-| `--delay MS` | site mode: wait between tagpro.eu requests (default 2000) |
+| `--delay MS` | wait between tagpro.eu requests (default and minimum 2000) |
 | `--threads N` | bulk mode: how many threads work out matches (default: CPU cores − 1, at most 4; `1` = no extra threads) |
 
 ### Filter files

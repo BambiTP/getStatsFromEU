@@ -26,7 +26,7 @@
 //   --bulk PATH       bulk file, or folder of bulk files (bulk mode)     default ~/tagpro.eu
 //   --download        bulk mode: fetch the id range from tagpro.eu's bulk endpoint into --cache first
 //   --cache DIR       where downloads are kept and reused               default ./cache
-//   --delay MS        wait between tagpro.eu requests                    default 2000
+//   --delay MS        wait between tagpro.eu requests                    default 2000 (the minimum)
 //   --threads N       bulk mode: work out matches on N threads           default CPU cores - 1, at most 4
 //
 // Timeline stats follow the TagPro League's own rules (STAT_DEFINITIONS.md section 4); thresholds below.
@@ -74,7 +74,6 @@ const TPR_KEY = 2 * FPS;          // key return: less than this before a teammat
 const TPR_SAVE_RADIUS = 6 * 40;   // save: the splat less than 6 tiles from the enemy flag's centre...
 const TPR_SPLAT_SHIFT = 0.5;      // ...measured from the splat moved half a pixel right and down
 
-// GASP (TagPro League) weights; NISH uses the same ones with the totals made per minute
 // GASP and NISH weights, fitted to tagproleague.com's published GASP and NISH tables
 const GASP_O = [['cpm', 2], ['score_pct', 2], ['captures', 5], ['hold', 4]];
 const GASP_D = [['rpm', 2], ['kd', 2], ['nrtpm', 1], ['returns', 4], ['prevent', 4]];
@@ -116,6 +115,9 @@ function parseArgs(argv) {
   }
   if (!['bulk', 'site'].includes(opt.mode)) die('first argument must be "bulk" or "site"');
   if (opt.all && opt.mode !== 'bulk') die('--all only works in bulk mode');
+  if (opt.all && opt.download) die('--all reads bulk files you already have; with --download give the ids or a range instead');
+  // tagpro.eu is someone else's free server: never ask faster than one request every 2 seconds
+  if (!Number.isFinite(opt.delay) || opt.delay < 2000) die('--delay must be a number of milliseconds, at least 2000');
   if (!opt.matches && !opt.totals) die('--no-matches needs --totals, or there is nothing to write');
   return opt;
 }
@@ -126,7 +128,8 @@ function loadAliases(file) {
   const groups = [];
   const t = text.trim();
   if (t.startsWith('{') || t.startsWith('[')) {
-    const j = JSON.parse(t);
+    let j;
+    try { j = JSON.parse(t); } catch (e) { die(`aliases: ${file} looks like JSON but can't be read (${e.message})`); }
     if (Array.isArray(j)) for (const g of j) groups.push([g.main, ...(g.alts || [])]);
     else for (const [main, alts] of Object.entries(j)) groups.push([main, ...(alts || [])]);
   } else {
@@ -155,11 +158,9 @@ function loadAliases(file) {
   return map;
 }
 
-// "100-200, 305 ?match=400" -> sorted unique ids. Links count as their match id.
 // ---------------------------------------------------------------- filters
 
 const FILTER_OPS = ['has all', 'has any', 'has none', 'one of', '!contains', 'contains', '<=', '>=', '!=', '=', '<', '>'];
-const LIST_COLUMNS = new Set(['teammates', 'opponents', 'in_game']);
 
 // a filter file -> [[{ column, op, value }, ...], ...]: groups of conditions that must all be true;
 // a row passes if any group does. Text (one condition per line, "or" between groups) or the app's JSON.
@@ -219,6 +220,7 @@ function passes(c, row, inGame) {
   return { '=': text === x, '!=': text !== x, '<': text < x, '<=': text <= x, '>': text > x, '>=': text >= x }[c.op] ?? false;
 }
 
+// "100-200, 305 ?match=400" -> sorted unique ids. Links count as their match id.
 function parseIds(specs) {
   const ids = new Set();
   for (const spec of specs) {
@@ -308,6 +310,7 @@ async function* scanBulk(file, wanted, maxId) {
 // like matches_00000000_00124999.json.gz / bulk_4174512_4244514.json
 function bulkFiles(where, ids) {
   const covers = (f) => ids === null || ids.some((i) => f.first <= i && i <= f.last);
+  if (!fs.existsSync(where)) die(`no bulk file or folder at ${where}`);
   if (fs.statSync(where).isFile()) return [where];
   const manifest = path.join(where, 'manifest.json');
   let files;
@@ -369,9 +372,16 @@ async function mapsFile(opt) {
 
 async function* fromBulk(opt, ids) {
   if (opt.all) {                                   // every match in the bulk file(s)
-    for (const file of bulkFiles(opt.bulk, null)) {
+    const files = bulkFiles(opt.bulk, null);
+    if (!files.length) die(`no bulk files in ${opt.bulk}`);
+    // a folder can hold files that overlap (a mirror's pieces and bigger copies): each match only once
+    const seen = files.length > 1 ? new Set() : null;
+    for (const file of files) {
       console.error(`reading ${file}`);
-      yield* scanBulk(file, null, Infinity);
+      for await (const [id, text] of scanBulk(file, null, Infinity)) {
+        if (seen) { if (seen.has(id)) continue; seen.add(id); }
+        yield [id, text];
+      }
     }
     return;
   }
@@ -454,7 +464,7 @@ function matchStats(id, raw, maps, allModes) {
   const duration = m.duration;
   const limit = (m.timeLimit || 0) * 60 * FPS;
   const ps = m.players.map((p, idx) => ({
-    idx, name: p.name, auth: !!p.auth, euScore: p.score ?? 0, euPoints: p.points ?? 0,
+    idx, name: String(p.name ?? ''), auth: !!p.auth, euScore: p.score ?? 0, euPoints: p.points ?? 0,
     tags: 0, pops: 0, grabs: 0, drops: 0, captures: 0, returns: 0,
     hold: 0, prevent: 0, button: 0, block: 0,
     pups: 0, jj: 0, rb: 0, tp: 0, ts: 0,
@@ -824,7 +834,12 @@ function gaspNish(rows) {
     }
     return z;
   };
-  const percentRank = (values) => values.map((v) => values.filter((x) => x < v).length / (values.length - 1));
+  // players below each value, by binary search in the sorted values (a big run can rate 100,000s of players)
+  const percentRank = (values) => {
+    const sorted = values.slice().sort((a, b) => a - b);
+    const below = (v) => { let lo = 0, hi = sorted.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < v) lo = mid + 1; else hi = mid; } return lo; };
+    return values.map((v) => below(v) / (values.length - 1));
+  };
   for (const r of rows) Object.assign(r, { gasp_o: '', gasp_d: '', gasp_t: '', nish_o: '', nish_d: '', nish_t: '' });
 
   const pool = rows.filter((r) => r.regulation_minutes >= RATING_MIN_MINUTES);
@@ -877,7 +892,7 @@ function makeMatchWorker({ maps, allModes, aliases, json, totals, filter }) {
   return (seq, id, text) => {
     const result = processMatch(id, text, maps, allModes);
     if (result.error) return { error: result.error };
-    if (!result.rows) return { skipped: true };
+    if (!result.rows || !result.rows.length) return { skipped: true };
     let renamed = 0, lines = '', kept = 0;
     for (const r of result.rows) {
       const main = aliases && aliases.get(r.player.toLowerCase());
